@@ -1,0 +1,13 @@
+[package]
+name = "fsct-roon-extension"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+fsct-client = { git = "https://github.com/HEM-RnD/fsct-host.git", branch = "develop"}
+roon-api = { git = "https://github.com/TheAppgineer/rust-roon-api.git", tag = "0.3.1", features = ["settings", "status", "transport"] }
+tokio = { version = "1.47", features = ["macros", "rt"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+anyhow = "1.0.100"
+typetag = "0.2.21"
