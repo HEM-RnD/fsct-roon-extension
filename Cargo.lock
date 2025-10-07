@@ -178,7 +178,7 @@ dependencies = [
 [[package]]
 name = "fsct-client"
 version = "0.2.13"
-source = "git+https://github.com/HEM-RnD/fsct-host.git?branch=develop#039609f3308533ee3e03c8d7d3ce8424c9ebd446"
+source = "git+https://github.com/HEM-RnD/fsct-host.git?branch=FSCT-7-Roon-extension#6a90278565a1e7527dc8f1228ea1223ba225c37a"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -193,7 +193,7 @@ dependencies = [
 [[package]]
 name = "fsct-core"
 version = "0.2.13"
-source = "git+https://github.com/HEM-RnD/fsct-host.git?branch=develop#039609f3308533ee3e03c8d7d3ce8424c9ebd446"
+source = "git+https://github.com/HEM-RnD/fsct-host.git?branch=FSCT-7-Roon-extension#6a90278565a1e7527dc8f1228ea1223ba225c37a"
 dependencies = [
  "anyhow",
  "async-trait",
