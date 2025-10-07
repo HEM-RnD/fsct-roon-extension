@@ -13,7 +13,7 @@ use player_manager::PlayerManager;
 use state_cache::StateCache;
 use zone_handler::ZoneEventHandler;
 use roon_api::{settings as roon_settings, CoreEvent, Info, Parsed, RoonApi, Services, Svc};
-use settings::{make_layout, ExtensionSettings};
+use settings::{make_layout, mappings_to_settings, settings_to_mappings, ExtensionSettings};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
@@ -64,8 +64,6 @@ async fn main() -> Result<()> {
     let available_outputs_for_layout = available_outputs_clone.clone();
 
     let get_layout = move |settings: Option<ExtensionSettings>| {
-        let settings = settings.unwrap_or_default();
-
         // Get available FSCT devices
         let devices = tokio::task::block_in_place(|| {
             tokio::runtime::Handle::current().block_on(async {
@@ -86,6 +84,9 @@ async fn main() -> Result<()> {
                 available_outputs_for_layout.read().await.clone()
             })
         });
+
+        // Convert settings or create from current mappings
+        let settings = settings.unwrap_or_else(|| mappings_to_settings(&current_mappings, &outputs));
 
         make_layout(settings, devices, &current_mappings, outputs)
     };
@@ -195,6 +196,35 @@ async fn handle_message(
         Parsed::RoonState(state) => {
             if let Err(e) = RoonApi::save_roon_state(ROON_STATE_FILE, state) {
                 log::error!("Error saving Roon state: {}", e);
+            }
+        }
+        Parsed::SettingsSaved(settings_value) => {
+            log::info!("Settings saved, updating mappings");
+
+            // Deserialize settings
+            if let Ok(settings) = serde_json::from_value::<ExtensionSettings>(settings_value) {
+                // Convert settings to mappings
+                let new_mappings = settings_to_mappings(&settings);
+
+                // Update mappings
+                {
+                    let mut mappings_write = mappings.write().await;
+                    mappings_write.clear();
+                    for (output_id, device_uuid) in new_mappings {
+                        mappings_write.set(output_id, device_uuid);
+                    }
+
+                    // Save mappings immediately
+                    if let Err(e) = mappings_write.save(MAPPINGS_FILE) {
+                        log::error!("Error saving mappings: {}", e);
+                    }
+                }
+
+                // Trigger re-evaluation of outputs
+                let outputs = available_outputs.read().await.clone();
+                handle_outputs_changed(outputs, mappings.clone(), driver.clone(), player_manager.clone()).await;
+            } else {
+                log::error!("Failed to deserialize settings");
             }
         }
         Parsed::Outputs(outputs) => {
