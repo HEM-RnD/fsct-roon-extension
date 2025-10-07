@@ -178,7 +178,7 @@ dependencies = [
 [[package]]
 name = "fsct-client"
 version = "0.2.13"
-source = "git+https://github.com/HEM-RnD/fsct-host.git?branch=FSCT-7-Roon-extension#6a90278565a1e7527dc8f1228ea1223ba225c37a"
+source = "git+https://github.com/HEM-RnD/fsct-host.git?branch=FSCT-7-Roon-extension#d6ac59fd19fa0be312f04103598d6451bc695ac1"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -193,7 +193,7 @@ dependencies = [
 [[package]]
 name = "fsct-core"
 version = "0.2.13"
-source = "git+https://github.com/HEM-RnD/fsct-host.git?branch=FSCT-7-Roon-extension#6a90278565a1e7527dc8f1228ea1223ba225c37a"
+source = "git+https://github.com/HEM-RnD/fsct-host.git?branch=FSCT-7-Roon-extension#d6ac59fd19fa0be312f04103598d6451bc695ac1"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -207,12 +207,12 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "fsct-client",
- "parking_lot",
+ "fsct-core",
  "roon-api",
  "serde",
  "serde_json",
  "tokio",
- "typetag",
+ "uuid",
 ]
 
 [[package]]
@@ -527,11 +527,10 @@ checksum = "241eaef5fd12c88705a01fc1066c48c4b36e0dd4377dcdc7ec3942cea7a69956"
 
 [[package]]
 name = "lock_api"
-version = "0.4.13"
+version = "0.4.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "96936507f153605bddfcda068dd804796c84324ed2510809e5b2a624c81da765"
+checksum = "224399e74b87b5f3557511d98dff8b14089b3dadafcab6bb93eab67d3aace965"
 dependencies = [
- "autocfg",
  "scopeguard",
 ]
 
@@ -606,9 +605,9 @@ checksum = "42f5e15c9953c5e4ccceeb2e7382a716482c34515315f7b03532b8b4e8393d2d"
 
 [[package]]
 name = "parking_lot"
-version = "0.12.4"
+version = "0.12.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "70d58bf43669b5795d1576d0641cfb6fbb2057bf629506267a92807158584a13"
+checksum = "93857453250e3077bd71ff98b6a65ea6621a19bb0f559a85248955ac12c45a1a"
 dependencies = [
  "lock_api",
  "parking_lot_core",
@@ -616,15 +615,15 @@ dependencies = [
 
 [[package]]
 name = "parking_lot_core"
-version = "0.9.11"
+version = "0.9.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bc838d2a56b5b1a6c25f55575dfc605fabb63bb2365f6c2353ef9159aa69e4a5"
+checksum = "2621685985a2ebf1c516881c026032ac7deafcda1a2c9b7850dc81e3dfcb64c1"
 dependencies = [
  "cfg-if",
  "libc",
  "redox_syscall",
  "smallvec",
- "windows-targets",
+ "windows-link",
 ]
 
 [[package]]
@@ -725,9 +724,9 @@ dependencies = [
 
 [[package]]
 name = "redox_syscall"
-version = "0.5.17"
+version = "0.5.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5407465600fb0548f1442edf71dd20683c6ed326200ace4b1ef0763521bb3b77"
+checksum = "ed2bf2547551a7053d6fdfafda3f938979645c44812fbfcda098faae3f1a362d"
 dependencies = [
  "bitflags",
 ]
@@ -1123,6 +1122,7 @@ checksum = "2f87b8aa10b915a06587d0dec516c282ff295b475d94abf425d62b57710070a2"
 dependencies = [
  "getrandom 0.3.3",
  "js-sys",
+ "serde",
  "sha1_smol",
  "wasm-bindgen",
 ]
@@ -1240,9 +1240,9 @@ checksum = "712e227841d057c1ee1cd2fb22fa7e5a5461ae8e48fa2ca79ec42cfc1931183f"
 
 [[package]]
 name = "windows-link"
-version = "0.2.0"
+version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "45e46c0661abb7180e7b9c281db115305d49ca1709ab8242adf09666d2173c65"
+checksum = "f0805222e57f7521d6a62e36fa9163bc891acd422f971defe97d64e70d0a4fe5"
 
 [[package]]
 name = "windows-sys"

@@ -1,111 +1,41 @@
+mod conversions;
+mod mapping;
+mod player_manager;
+mod settings;
+
+use anyhow::Result;
+use conversions::convert_zone_to_player_state;
+use fsct::FsctDriver;
+use fsct_client::IpcDriver;
+use mapping::Mappings;
+use player_manager::PlayerManager;
+use roon_api::transport::Zone;
+use roon_api::{settings as roon_settings, CoreEvent, Info, Parsed, RoonApi, Services, Svc};
+use settings::{make_layout, ExtensionSettings};
 use std::collections::HashMap;
-use std::time::Duration;
-use roon_api::{RoonApi, Info, Services, Svc, Core, CoreEvent, Parsed, settings};
-use roon_api::{transport, status};
-use roon_api::settings::{BoxedSerTrait, Dropdown, Integer, Layout, SerTrait, Settings, Widget};
-use serde::{Deserialize, Serialize};
-use serde_json::Value;
-use tokio::time::sleep;
+use std::sync::Arc;
+use tokio::sync::RwLock;
 
-async fn handle_roon_message(msg: Value, parsed: Parsed) {
-    match parsed {
-        Parsed::RoonState(state) => {
-            RoonApi::save_roon_state("./some_state.txt", state).expect("Failed to save roon state");
+const MAPPINGS_FILE: &str = "./fsct_roon_mappings.json";
+const ROON_STATE_FILE: &str = "./fsct_roon_state.json";
 
-        }
-        Parsed::Outputs(outputs) => println!("Outputs: {:?}", outputs.iter().map(|o| o.display_name.clone()).collect::<Vec<String>>()),
-        Parsed::Zones(zones) => println!("Zones: {:?}", zones.iter().map(|z| (z.display_name.clone(), z.state.clone()
-                                                                              , z.now_playing.clone(), z.outputs.clone()))
-            .collect::<Vec<_>>()),
-        p => println!("Other message: {:?}", p)
-    }
-}
+#[tokio::main]
+async fn main() -> Result<()> {
+    println!("=== FSCT-Roon Extension Starting ===");
 
-async fn handle_roon_core_event(event: CoreEvent) {
-    match event {
-        CoreEvent::None => println!("None core, event"),
-        CoreEvent::Discovered(core, id) => println!("Discovered core: {:?}, string: {:?}", core, id),
-        CoreEvent::Registered(mut core, id) => {
-            let transport = core.get_transport().cloned();
-            if let Some(transport) = transport {
-                transport.subscribe_outputs().await;
-                transport.subscribe_zones().await;
-            }
-        },
-        CoreEvent::Lost(core) => println!("Lost core {:?}", core),
-    }
-}
+    // Load mappings
+    let mappings = Arc::new(RwLock::new(Mappings::load(MAPPINGS_FILE)?));
+    println!("Loaded mappings");
 
-#[derive(Debug, Default, Deserialize, Serialize)]
-struct MySettings {
-    state: bool,
-    integer: String,
-}
+    // Connect to FSCT driver
+    let driver = Arc::new(IpcDriver::connect().await?);
+    println!("Connected to FSCT driver");
 
-#[derive(Debug, Default, Deserialize, Serialize)]
-struct Entry {
-    title: String,
-    value: bool,
-}
+    // Player manager
+    let player_manager = Arc::new(RwLock::new(PlayerManager::new()));
+    println!("Player manager initialized");
 
-#[typetag::serde]
-impl SerTrait for Entry {}
-
-
-impl Entry {
-    fn new(title: &str, value: bool) -> BoxedSerTrait {
-        Box::new(
-            Entry {
-                title: title.to_owned(),
-                value,
-            }
-        ) as BoxedSerTrait
-    }
-}
-
-
-fn make_layout(settings: MySettings) -> Layout<MySettings> {
-    let mut has_error = false;
-    let values = vec![
-        Entry::new("Disabled", false),
-        Entry::new("Enabled", true),
-    ];
-    let dropdown = Dropdown {
-        title: "Dropdown",
-        subtitle: None,
-        values,
-        setting: "state",
-    };
-    let mut integer = Integer {
-        title: "Integer",
-        subtitle: None,
-        min: "0".to_owned(),
-        max: "100".to_owned(),
-        setting: "integer",
-        error: None,
-    };
-
-    if let Ok(out_of_range) = integer.out_of_range(&settings.integer) {
-        if out_of_range {
-            integer.error = Some(format!("Value should be between {} and {}", integer.min, integer.max));
-            has_error = true;
-        }
-    }
-
-    let widgets = vec![
-        Widget::Dropdown(dropdown),
-        Widget::Integer(integer),
-    ];
-
-    Layout {
-        settings,
-        widgets,
-        has_error,
-    }
-}
-
-#[tokio::main(flavor = "current_thread")]
-async fn main() -> anyhow::Result<()> {
+    // Initialize Roon API
     let mut roon = RoonApi::new(Info::new(
         "com.hem-e.fsct".to_string(),
         "Ferrum Streaming Control Technology™",
@@ -114,50 +44,227 @@ async fn main() -> anyhow::Result<()> {
         "info@hem-e.com",
         Some("https://github.com/HEM-RnD/fsct-roon-extension"),
     ));
+    println!("Roon API initialized");
 
-    let on_connect = move || {
-        let roon_state = RoonApi::load_roon_state("./some_state.txt");
-        println!("Roon state: {:?}", roon_state);
-        roon_state
-    };
-    let get_layout = |settings: Option<MySettings>| -> Layout<MySettings> {
-        let settings = settings.unwrap_or_else(|| {
-            let value = RoonApi::load_config("config.json", "settings");
-            serde_json::from_value(value).unwrap_or_default()
+    // Setup settings callback
+    let mappings_clone = mappings.clone();
+    let driver_clone = driver.clone();
+    let available_outputs_clone = Arc::new(RwLock::new(Vec::new()));
+    let available_outputs_for_layout = available_outputs_clone.clone();
+
+    let get_layout = move |settings: Option<ExtensionSettings>| {
+        let settings = settings.unwrap_or_default();
+
+        // Get available FSCT devices
+        let devices = tokio::task::block_in_place(|| {
+            tokio::runtime::Handle::current().block_on(async {
+                driver_clone.get_detected_devices().await.unwrap_or_default()
+            })
         });
 
-        make_layout(settings)
+        // Get current mappings
+        let current_mappings = tokio::task::block_in_place(|| {
+            tokio::runtime::Handle::current().block_on(async {
+                mappings_clone.read().await.all().clone()
+            })
+        });
+
+        // Get available outputs
+        let outputs = tokio::task::block_in_place(|| {
+            tokio::runtime::Handle::current().block_on(async {
+                available_outputs_for_layout.read().await.clone()
+            })
+        });
+
+        make_layout(settings, devices, &current_mappings, outputs)
     };
-    let (svc, settings) = Settings::new(&roon, Box::new(get_layout));
+
+    let (svc, settings_service) = roon_settings::Settings::new(&roon, Box::new(get_layout));
 
     let services = Some(vec![
-        Services::Transport(transport::Transport::new()),
-        Services::Settings(settings)
-    ]);
-    let provided: HashMap<String, Svc> = HashMap::from([
-        (settings::SVCNAME.to_owned(), svc),
+        Services::Transport(roon_api::transport::Transport::new()),
+        Services::Settings(settings_service),
     ]);
 
-    let result = roon.start_discovery(Box::new(on_connect), provided, services).await;
+    let provided: HashMap<String, Svc> =
+        HashMap::from([(roon_settings::SVCNAME.to_owned(), svc)]);
 
+    // Connection callback
+    let on_connect = move || RoonApi::load_roon_state(ROON_STATE_FILE);
+
+    // Start Roon discovery
+    println!("Starting Roon discovery...");
+    let result = roon
+        .start_discovery(Box::new(on_connect), provided, services)
+        .await;
 
     if let Some((mut handlers, mut core_rx)) = result {
+        println!("Roon discovery started");
 
+        // Clone for handlers
+        let mappings_h = mappings.clone();
+        let driver_h = driver.clone();
+        let player_manager_h = player_manager.clone();
+        let available_outputs_h = available_outputs_clone.clone();
+
+        // Roon message handler
         handlers.spawn(async move {
             loop {
                 if let Some((core_event, msg)) = core_rx.recv().await {
-                    handle_roon_core_event(core_event).await;
+                    handle_core_event(core_event).await;
+
                     if let Some((msg, parsed)) = msg {
-                        handle_roon_message(msg, parsed).await;
+                        handle_message(
+                            msg,
+                            parsed,
+                            mappings_h.clone(),
+                            driver_h.clone(),
+                            player_manager_h.clone(),
+                            available_outputs_h.clone(),
+                        )
+                        .await;
                     }
                 }
             }
         });
-        println!("Waiting for handlers to join");
+
+        // Periodic save mappings
+        let mappings_save = mappings.clone();
+        handlers.spawn(async move {
+            let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(60));
+            loop {
+                interval.tick().await;
+                let mappings = mappings_save.read().await;
+                if let Err(e) = mappings.save(MAPPINGS_FILE) {
+                    eprintln!("Error saving mappings: {}", e);
+                }
+            }
+        });
+
+        println!("Handlers spawned, running...");
         handlers.join_next().await;
-        println!("Joined");
     }
 
-    sleep(Duration::from_secs(10)).await;
+    println!("=== FSCT-Roon Extension Stopped ===");
     Ok(())
+}
+
+async fn handle_core_event(event: CoreEvent) {
+    match event {
+        CoreEvent::Discovered(_core, id) => {
+            println!("Roon core discovered: {:?}", id);
+        }
+        CoreEvent::Registered(mut core, id) => {
+            println!("Roon core registered: {:?}", id);
+            // Subscribe to transport events
+            if let Some(transport) = core.get_transport() {
+                transport.subscribe_outputs().await;
+                transport.subscribe_zones().await;
+            }
+        }
+        CoreEvent::Lost(_core) => {
+            println!("Roon core connection lost");
+        }
+        CoreEvent::None => {}
+    }
+}
+
+async fn handle_message(
+    _msg: serde_json::Value,
+    parsed: Parsed,
+    mappings: Arc<RwLock<Mappings>>,
+    driver: Arc<IpcDriver>,
+    player_manager: Arc<RwLock<PlayerManager>>,
+    available_outputs: Arc<RwLock<Vec<roon_api::transport::Output>>>,
+) {
+    match parsed {
+        Parsed::RoonState(state) => {
+            if let Err(e) = RoonApi::save_roon_state(ROON_STATE_FILE, state) {
+                eprintln!("Error saving Roon state: {}", e);
+            }
+        }
+        Parsed::Outputs(outputs) => {
+            println!("Outputs changed: {} outputs", outputs.len());
+
+            // Update available outputs for settings UI
+            {
+                let mut available_outputs_write = available_outputs.write().await;
+                *available_outputs_write = outputs.clone();
+            }
+
+            handle_outputs_changed(outputs, mappings, driver, player_manager).await;
+        }
+        Parsed::Zones(zones) => {
+            println!("Zones changed: {} zones", zones.len());
+            for zone in zones {
+                handle_zone_changed(zone, player_manager.clone(), driver.clone()).await;
+            }
+        }
+        _ => {}
+    }
+}
+
+async fn handle_outputs_changed(
+    outputs: Vec<roon_api::transport::Output>,
+    mappings: Arc<RwLock<Mappings>>,
+    driver: Arc<IpcDriver>,
+    player_manager: Arc<RwLock<PlayerManager>>,
+) {
+    let mappings_read = mappings.read().await;
+    let mut pm = player_manager.write().await;
+
+    // Get list of currently available output IDs
+    let available_outputs: Vec<String> = outputs.iter().map(|o| o.output_id.clone()).collect();
+
+    // Unregister players for outputs that are no longer available
+    for registered_output in pm.registered_outputs() {
+        if !available_outputs.contains(&registered_output) {
+            println!("Output {} no longer available, unregistering player", registered_output);
+            if let Err(e) = pm.unregister(&*driver, &registered_output).await {
+                eprintln!("Error unregistering player for {}: {}", registered_output, e);
+            }
+        }
+    }
+
+    // Register players for newly available mapped outputs
+    for output in outputs {
+        if let Some(device_uuid) = mappings_read.get(&output.output_id) {
+            if !pm.has_player(&output.output_id) {
+                println!(
+                    "Output {} is mapped to device {}, registering player",
+                    output.output_id, device_uuid
+                );
+                if let Err(e) = pm
+                    .register(&*driver, output.output_id.clone(), device_uuid)
+                    .await
+                {
+                    eprintln!("Error registering player: {}", e);
+                }
+            }
+        }
+    }
+}
+
+async fn handle_zone_changed(
+    zone: Zone,
+    player_manager: Arc<RwLock<PlayerManager>>,
+    driver: Arc<IpcDriver>,
+) {
+    let pm = player_manager.read().await;
+
+    // Update state for all outputs in this zone
+    for output in &zone.outputs {
+        if let Some(player_id) = pm.get_player(&output.output_id) {
+            let player_state = convert_zone_to_player_state(&zone);
+
+            println!(
+                "Updating player {:?} for output {} - status: {:?}",
+                player_id, output.output_id, player_state.status
+            );
+
+            if let Err(e) = driver.update_player_state(player_id, player_state).await {
+                eprintln!("Error updating player state: {}", e);
+            }
+        }
+    }
 }

@@ -1,5 +1,4 @@
-pub mod roon;
-pub mod fsct;
+pub mod conversions;
 pub mod mapping;
-pub mod sync;
+pub mod player_manager;
 pub mod settings;
