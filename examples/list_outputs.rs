@@ -13,8 +13,10 @@ const ROON_STATE_FILE: &str = "./examples_roon_state.txt";
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    println!("=== Roon Outputs Lister ===");
-    println!("Connecting to Roon Core...\n");
+    env_logger::init();
+
+    log::info!("=== Roon Outputs Lister ===");
+    log::info!("Connecting to Roon Core...\n");
 
     // Initialize Roon API
     let mut roon = RoonApi::new(Info::new(
@@ -42,7 +44,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .await;
 
     if let Some((mut handlers, mut core_rx)) = result {
-        println!("Waiting for Roon Core...");
+        log::info!("Waiting for Roon Core...");
 
         // Message handler
         handlers.spawn(async move {
@@ -52,10 +54,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 if let Some((core_event, msg)) = core_rx.recv().await {
                     match core_event {
                         CoreEvent::Discovered(_core, id) => {
-                            println!("Roon core discovered: {:?}", id);
+                            log::info!("Roon core discovered: {:?}", id);
                         }
                         CoreEvent::Registered(mut core, id) => {
-                            println!("Roon core registered: {:?}\n", id);
+                            log::info!("Roon core registered: {:?}\n", id);
 
                             // Subscribe to outputs
                             if let Some(transport) = core.get_transport() {
@@ -63,7 +65,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             }
                         }
                         CoreEvent::Lost(_core) => {
-                            println!("Roon core connection lost");
+                            log::warn!("Roon core connection lost");
                             break;
                         }
                         CoreEvent::None => {}
@@ -73,7 +75,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         match parsed {
                             Parsed::RoonState(state) => {
                                 if let Err(e) = RoonApi::save_roon_state(ROON_STATE_FILE, state) {
-                                    eprintln!("Error saving Roon state: {}", e);
+                                    log::error!("Error saving Roon state: {}", e);
                                 }
                             }
                             Parsed::Outputs(outputs) => {
@@ -126,7 +128,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         handlers.join_next().await;
     } else {
-        println!("Failed to start Roon discovery");
+        log::error!("Failed to start Roon discovery");
     }
 
     Ok(())

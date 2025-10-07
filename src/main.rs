@@ -21,19 +21,20 @@ const ROON_STATE_FILE: &str = "./fsct_roon_state.json";
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    println!("=== FSCT-Roon Extension Starting ===");
+    env_logger::init();
+    log::info!("=== FSCT-Roon Extension Starting ===");
 
     // Load mappings
     let mappings = Arc::new(RwLock::new(Mappings::load(MAPPINGS_FILE)?));
-    println!("Loaded mappings");
+    log::info!("Loaded mappings");
 
     // Connect to FSCT driver
     let driver = Arc::new(IpcDriver::connect().await?);
-    println!("Connected to FSCT driver");
+    log::info!("Connected to FSCT driver");
 
     // Player manager
     let player_manager = Arc::new(RwLock::new(PlayerManager::new()));
-    println!("Player manager initialized");
+    log::info!("Player manager initialized");
 
     // Initialize Roon API
     let mut roon = RoonApi::new(Info::new(
@@ -44,7 +45,7 @@ async fn main() -> Result<()> {
         "info@hem-e.com",
         Some("https://github.com/HEM-RnD/fsct-roon-extension"),
     ));
-    println!("Roon API initialized");
+    log::info!("Roon API initialized");
 
     // Setup settings callback
     let mappings_clone = mappings.clone();
@@ -93,13 +94,13 @@ async fn main() -> Result<()> {
     let on_connect = move || RoonApi::load_roon_state(ROON_STATE_FILE);
 
     // Start Roon discovery
-    println!("Starting Roon discovery...");
+    log::info!("Starting Roon discovery...");
     let result = roon
         .start_discovery(Box::new(on_connect), provided, services)
         .await;
 
     if let Some((mut handlers, mut core_rx)) = result {
-        println!("Roon discovery started");
+        log::info!("Roon discovery started");
 
         // Clone for handlers
         let mappings_h = mappings.clone();
@@ -136,26 +137,26 @@ async fn main() -> Result<()> {
                 interval.tick().await;
                 let mappings = mappings_save.read().await;
                 if let Err(e) = mappings.save(MAPPINGS_FILE) {
-                    eprintln!("Error saving mappings: {}", e);
+                    log::error!("Error saving mappings: {}", e);
                 }
             }
         });
 
-        println!("Handlers spawned, running...");
+        log::info!("Handlers spawned, running...");
         handlers.join_next().await;
     }
 
-    println!("=== FSCT-Roon Extension Stopped ===");
+    log::info!("=== FSCT-Roon Extension Stopped ===");
     Ok(())
 }
 
 async fn handle_core_event(event: CoreEvent) {
     match event {
         CoreEvent::Discovered(_core, id) => {
-            println!("Roon core discovered: {:?}", id);
+            log::info!("Roon core discovered: {:?}", id);
         }
         CoreEvent::Registered(mut core, id) => {
-            println!("Roon core registered: {:?}", id);
+            log::info!("Roon core registered: {:?}", id);
             // Subscribe to transport events
             if let Some(transport) = core.get_transport() {
                 transport.subscribe_outputs().await;
@@ -163,7 +164,7 @@ async fn handle_core_event(event: CoreEvent) {
             }
         }
         CoreEvent::Lost(_core) => {
-            println!("Roon core connection lost");
+            log::warn!("Roon core connection lost");
         }
         CoreEvent::None => {}
     }
@@ -180,11 +181,11 @@ async fn handle_message(
     match parsed {
         Parsed::RoonState(state) => {
             if let Err(e) = RoonApi::save_roon_state(ROON_STATE_FILE, state) {
-                eprintln!("Error saving Roon state: {}", e);
+                log::error!("Error saving Roon state: {}", e);
             }
         }
         Parsed::Outputs(outputs) => {
-            println!("Outputs changed: {} outputs", outputs.len());
+            log::info!("Outputs changed: {} outputs", outputs.len());
 
             // Update available outputs for settings UI
             {
@@ -195,7 +196,7 @@ async fn handle_message(
             handle_outputs_changed(outputs, mappings, driver, player_manager).await;
         }
         Parsed::Zones(zones) => {
-            println!("Zones changed: {} zones", zones.len());
+            log::info!("Zones changed: {} zones", zones.len());
             for zone in zones {
                 handle_zone_changed(zone, player_manager.clone(), driver.clone()).await;
             }
@@ -219,9 +220,9 @@ async fn handle_outputs_changed(
     // Unregister players for outputs that are no longer available
     for registered_output in pm.registered_outputs() {
         if !available_outputs.contains(&registered_output) {
-            println!("Output {} no longer available, unregistering player", registered_output);
+            log::info!("Output {} no longer available, unregistering player", registered_output);
             if let Err(e) = pm.unregister(&*driver, &registered_output).await {
-                eprintln!("Error unregistering player for {}: {}", registered_output, e);
+                log::error!("Error unregistering player for {}: {}", registered_output, e);
             }
         }
     }
@@ -230,7 +231,7 @@ async fn handle_outputs_changed(
     for output in outputs {
         if let Some(device_uuid) = mappings_read.get(&output.output_id) {
             if !pm.has_player(&output.output_id) {
-                println!(
+                log::info!(
                     "Output {} is mapped to device {}, registering player",
                     output.output_id, device_uuid
                 );
@@ -238,7 +239,7 @@ async fn handle_outputs_changed(
                     .register(&*driver, output.output_id.clone(), device_uuid)
                     .await
                 {
-                    eprintln!("Error registering player: {}", e);
+                    log::error!("Error registering player: {}", e);
                 }
             }
         }
@@ -257,13 +258,13 @@ async fn handle_zone_changed(
         if let Some(player_id) = pm.get_player(&output.output_id) {
             let player_state = convert_zone_to_player_state(&zone);
 
-            println!(
+            log::debug!(
                 "Updating player {:?} for output {} - status: {:?}",
                 player_id, output.output_id, player_state.status
             );
 
             if let Err(e) = driver.update_player_state(player_id, player_state).await {
-                eprintln!("Error updating player state: {}", e);
+                log::error!("Error updating player state: {}", e);
             }
         }
     }

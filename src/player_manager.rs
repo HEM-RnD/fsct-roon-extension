@@ -25,7 +25,7 @@ impl PlayerManager {
     ) -> Result<ManagedPlayerId> {
         // Check if already registered
         if let Some((player_id, _)) = self.players.get(&output_id) {
-            println!(
+            log::debug!(
                 "Player already registered for output {}: {:?}",
                 output_id, player_id
             );
@@ -35,13 +35,13 @@ impl PlayerManager {
         // Register player with FSCT driver
         let player_name = format!("roon-{}", output_id);
         let player_id = driver.register_player(player_name).await?;
-        println!("Registered player {:?} for output {}", player_id, output_id);
+        log::info!("Registered player {:?} for output {}", player_id, output_id);
 
         // Assign player to device
         driver
             .assign_player_to_device(player_id, device_uuid)
             .await?;
-        println!(
+        log::info!(
             "Assigned player {:?} to device {}",
             player_id, device_uuid
         );
@@ -59,7 +59,7 @@ impl PlayerManager {
         output_id: &str,
     ) -> Result<()> {
         if let Some((player_id, device_uuid)) = self.players.remove(output_id) {
-            println!("Unregistering player {:?} for output {}", player_id, output_id);
+            log::info!("Unregistering player {:?} for output {}", player_id, output_id);
 
             // Unassign from device
             driver
@@ -69,7 +69,7 @@ impl PlayerManager {
             // Unregister player
             driver.unregister_player(player_id).await?;
 
-            println!("Unregistered player {:?}", player_id);
+            log::info!("Unregistered player {:?}", player_id);
         }
 
         Ok(())

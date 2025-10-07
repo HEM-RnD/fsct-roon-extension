@@ -8,7 +8,7 @@ pub fn convert_status(roon_state: &State) -> FsctStatus {
         State::Playing => FsctStatus::Playing,
         State::Paused => FsctStatus::Paused,
         State::Stopped => FsctStatus::Stopped,
-        State::Loading => FsctStatus::Stopped, // Map loading to stopped
+        State::Loading => FsctStatus::Buffering,
     }
 }
 
@@ -19,8 +19,10 @@ pub fn convert_zone_to_player_state(zone: &Zone) -> PlayerState {
     // Extract timeline if available
     let timeline = zone.now_playing.as_ref().and_then(|np| {
         np.seek_position.map(|seek_pos| {
-            let position = Duration::from_secs(seek_pos as u64);
-            let duration = np.length.map(|len| Duration::from_secs(len as u64))
+            // seek_pos is in seconds (float), convert to Duration with millisecond precision
+            let position = Duration::from_secs_f64(seek_pos as f64);
+            let duration = np.length
+                .map(|len| Duration::from_secs(len as u64))
                 .unwrap_or(Duration::from_secs(0));
 
             TimelineInfo {
