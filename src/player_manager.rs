@@ -1,5 +1,5 @@
 use anyhow::Result;
-use fsct::{FsctDriver, ManagedPlayerId};
+use fsct::{FsctDriver, ManagedPlayerId, TimelineInfo};
 use std::collections::HashMap;
 use uuid::Uuid;
 
@@ -7,12 +7,18 @@ use uuid::Uuid;
 pub struct PlayerManager {
     /// output_id -> (player_id, device_uuid)
     players: HashMap<String, (ManagedPlayerId, Uuid)>,
+    /// zone_id -> Vec<output_id> - tracks which outputs belong to which zone
+    zone_outputs: HashMap<String, Vec<String>>,
+    /// player_id -> last TimelineInfo - cached state for seek updates
+    player_timelines: HashMap<ManagedPlayerId, TimelineInfo>,
 }
 
 impl PlayerManager {
     pub fn new() -> Self {
         Self {
             players: HashMap::new(),
+            zone_outputs: HashMap::new(),
+            player_timelines: HashMap::new(),
         }
     }
 
@@ -93,6 +99,34 @@ impl PlayerManager {
     /// Get count of registered players
     pub fn count(&self) -> usize {
         self.players.len()
+    }
+
+    /// Update zone mapping - track which outputs belong to which zone
+    pub fn update_zone_mapping(&mut self, zone_id: String, output_ids: Vec<String>) {
+        self.zone_outputs.insert(zone_id, output_ids);
+    }
+
+    /// Get all player IDs for outputs in a zone
+    pub fn get_players_for_zone(&self, zone_id: &str) -> Vec<ManagedPlayerId> {
+        self.zone_outputs
+            .get(zone_id)
+            .map(|output_ids| {
+                output_ids
+                    .iter()
+                    .filter_map(|output_id| self.get_player(output_id))
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    /// Save timeline info for a player
+    pub fn save_timeline(&mut self, player_id: ManagedPlayerId, timeline: TimelineInfo) {
+        self.player_timelines.insert(player_id, timeline);
+    }
+
+    /// Get saved timeline info for a player
+    pub fn get_timeline(&self, player_id: ManagedPlayerId) -> Option<&TimelineInfo> {
+        self.player_timelines.get(&player_id)
     }
 }
 

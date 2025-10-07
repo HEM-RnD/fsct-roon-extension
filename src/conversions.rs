@@ -1,6 +1,7 @@
 use fsct::{FsctStatus, PlayerState, TrackMetadata, TimelineInfo};
 use roon_api::transport::{Zone, State};
 use std::time::{Duration, SystemTime};
+use log::debug;
 
 /// Convert Roon playback State to FSCT status
 pub fn convert_status(roon_state: &State) -> FsctStatus {
@@ -12,18 +13,14 @@ pub fn convert_status(roon_state: &State) -> FsctStatus {
     }
 }
 
-/// Convert Roon zone to FSCT PlayerState
-pub fn convert_zone_to_player_state(zone: &Zone) -> PlayerState {
-    let status = convert_status(&zone.state);
+/// Convert Roon zone to FSCT TimelineInfo (for seek-only updates)
+pub fn convert_zone_to_timeline_info(zone: &Zone) -> Option<TimelineInfo> {
+    zone.now_playing.as_ref().and_then(|np| {
+        let position = np.seek_position.map(|seek_pos| Duration::from_secs_f64(seek_pos as f64)).unwrap_or_default();
+        np.length.map(|len| {
+            let duration = Duration::from_secs_f64(len as f64);
 
-    // Extract timeline if available
-    let timeline = zone.now_playing.as_ref().and_then(|np| {
-        np.seek_position.map(|seek_pos| {
-            // seek_pos is in seconds (float), convert to Duration with millisecond precision
-            let position = Duration::from_secs_f64(seek_pos as f64);
-            let duration = np.length
-                .map(|len| Duration::from_secs(len as u64))
-                .unwrap_or(Duration::from_secs(0));
+            debug!("Zone {} - seek position: {}s, duration: {}s", zone.zone_id, position.as_secs_f64(), duration.as_secs_f64());
 
             TimelineInfo {
                 position,
@@ -32,7 +29,15 @@ pub fn convert_zone_to_player_state(zone: &Zone) -> PlayerState {
                 rate: if zone.state == State::Playing { 1.0 } else { 0.0 },
             }
         })
-    });
+    })
+}
+
+/// Convert Roon zone to FSCT PlayerState
+pub fn convert_zone_to_player_state(zone: &Zone) -> PlayerState {
+    let status = convert_status(&zone.state);
+
+    // Extract timeline if available
+    let timeline = convert_zone_to_timeline_info(zone);
 
     // Extract metadata
     let texts = if let Some(now_playing) = &zone.now_playing {
