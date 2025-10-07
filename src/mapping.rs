@@ -22,13 +22,13 @@ impl Mappings {
     /// Load mappings from file
     pub fn load(path: &str) -> Result<Self> {
         if !Path::new(path).exists() {
-            println!("Mappings file not found, starting with empty mappings");
+            log::info!("Mappings file not found, starting with empty mappings");
             return Ok(Self::new());
         }
 
         let content = fs::read_to_string(path)?;
         let mappings: Self = serde_json::from_str(&content)?;
-        println!("Loaded {} mappings from {}", mappings.map.len(), path);
+        log::info!("Loaded {} mappings from {}", mappings.map.len(), path);
         Ok(mappings)
     }
 
@@ -36,7 +36,7 @@ impl Mappings {
     pub fn save(&self, path: &str) -> Result<()> {
         let content = serde_json::to_string_pretty(&self)?;
         fs::write(path, content)?;
-        println!("Saved {} mappings to {}", self.map.len(), path);
+        log::debug!("Saved {} mappings to {}", self.map.len(), path);
         Ok(())
     }
 
