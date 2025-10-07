@@ -1,5 +1,5 @@
 use anyhow::Result;
-use fsct::{FsctDriver, ManagedPlayerId, TimelineInfo};
+use fsct::{FsctDriver, ManagedPlayerId};
 use std::collections::HashMap;
 use uuid::Uuid;
 
@@ -9,8 +9,6 @@ pub struct PlayerManager {
     players: HashMap<String, (ManagedPlayerId, Uuid)>,
     /// zone_id -> Vec<output_id> - tracks which outputs belong to which zone
     zone_outputs: HashMap<String, Vec<String>>,
-    /// player_id -> last TimelineInfo - cached state for seek updates
-    player_timelines: HashMap<ManagedPlayerId, TimelineInfo>,
 }
 
 impl PlayerManager {
@@ -18,7 +16,6 @@ impl PlayerManager {
         Self {
             players: HashMap::new(),
             zone_outputs: HashMap::new(),
-            player_timelines: HashMap::new(),
         }
     }
 
@@ -117,16 +114,6 @@ impl PlayerManager {
                     .collect()
             })
             .unwrap_or_default()
-    }
-
-    /// Save timeline info for a player
-    pub fn save_timeline(&mut self, player_id: ManagedPlayerId, timeline: TimelineInfo) {
-        self.player_timelines.insert(player_id, timeline);
-    }
-
-    /// Get saved timeline info for a player
-    pub fn get_timeline(&self, player_id: ManagedPlayerId) -> Option<&TimelineInfo> {
-        self.player_timelines.get(&player_id)
     }
 }
 

@@ -2,14 +2,16 @@ mod conversions;
 mod mapping;
 mod player_manager;
 mod settings;
+mod state_cache;
+mod zone_handler;
 
 use anyhow::Result;
-use conversions::{convert_zone_to_player_state, convert_zone_to_timeline_info};
 use fsct::FsctDriver;
 use fsct_client::IpcDriver;
 use mapping::Mappings;
 use player_manager::PlayerManager;
-use roon_api::transport::{Zone, ZoneSeek};
+use state_cache::StateCache;
+use zone_handler::ZoneEventHandler;
 use roon_api::{settings as roon_settings, CoreEvent, Info, Parsed, RoonApi, Services, Svc};
 use settings::{make_layout, ExtensionSettings};
 use std::collections::HashMap;
@@ -32,9 +34,17 @@ async fn main() -> Result<()> {
     let driver = Arc::new(IpcDriver::connect().await?);
     log::info!("Connected to FSCT driver");
 
-    // Player manager
+    // Player manager and state cache
     let player_manager = Arc::new(RwLock::new(PlayerManager::new()));
-    log::info!("Player manager initialized");
+    let state_cache = Arc::new(RwLock::new(StateCache::new()));
+    log::info!("Player manager and state cache initialized");
+
+    // Zone event handler
+    let zone_handler = Arc::new(ZoneEventHandler::new(
+        player_manager.clone(),
+        state_cache.clone(),
+        driver.clone(),
+    ));
 
     // Initialize Roon API
     let mut roon = RoonApi::new(Info::new(
@@ -107,6 +117,7 @@ async fn main() -> Result<()> {
         let driver_h = driver.clone();
         let player_manager_h = player_manager.clone();
         let available_outputs_h = available_outputs_clone.clone();
+        let zone_handler_h = zone_handler.clone();
 
         // Roon message handler
         handlers.spawn(async move {
@@ -122,6 +133,7 @@ async fn main() -> Result<()> {
                             driver_h.clone(),
                             player_manager_h.clone(),
                             available_outputs_h.clone(),
+                            zone_handler_h.clone(),
                         )
                         .await;
                     }
@@ -177,6 +189,7 @@ async fn handle_message(
     driver: Arc<IpcDriver>,
     player_manager: Arc<RwLock<PlayerManager>>,
     available_outputs: Arc<RwLock<Vec<roon_api::transport::Output>>>,
+    zone_handler: Arc<ZoneEventHandler<IpcDriver>>,
 ) {
     match parsed {
         Parsed::RoonState(state) => {
@@ -198,13 +211,13 @@ async fn handle_message(
         Parsed::Zones(zones) => {
             log::info!("Zones changed: {} zones", zones.len());
             for zone in zones {
-                handle_zone_changed(zone, player_manager.clone(), driver.clone()).await;
+                zone_handler.handle_zone_changed(zone).await;
             }
         }
         Parsed::ZonesSeek(zones) => {
             log::debug!("Zones seek: {} zones", zones.len());
             for zone in zones {
-                handle_zone_seek(zone, player_manager.clone(), driver.clone()).await;
+                zone_handler.handle_zone_seek(zone).await;
             }
         }
         _ => {}
@@ -252,102 +265,3 @@ async fn handle_outputs_changed(
     }
 }
 
-async fn handle_zone_changed(
-    zone: Zone,
-    player_manager: Arc<RwLock<PlayerManager>>,
-    driver: Arc<IpcDriver>,
-) {
-    // Update zone mapping
-    {
-        let mut pm = player_manager.write().await;
-        let output_ids: Vec<String> = zone.outputs.iter()
-            .map(|o| o.output_id.clone())
-            .collect();
-        pm.update_zone_mapping(zone.zone_id.clone(), output_ids);
-    }
-
-    let mut pm = player_manager.write().await;
-
-    // Update state for all outputs in this zone
-    for output in &zone.outputs {
-        if let Some(player_id) = pm.get_player(&output.output_id) {
-            let player_state = convert_zone_to_player_state(&zone);
-
-            // Save timeline if present for future seek updates
-            if let Some(ref timeline) = player_state.timeline {
-                pm.save_timeline(player_id, timeline.clone());
-            }
-
-            log::debug!(
-                "Updating player {:?} for output {} - status: {:?}",
-                player_id, output.output_id, player_state.status
-            );
-
-            if let Err(e) = driver.update_player_state(player_id, player_state).await {
-                log::error!("Error updating player state: {}", e);
-            }
-        }
-    }
-}
-
-async fn handle_zone_seek(
-    zone_seek: ZoneSeek,
-    player_manager: Arc<RwLock<PlayerManager>>,
-    driver: Arc<IpcDriver>,
-) {
-    use std::time::{Duration, SystemTime};
-
-    let mut pm = player_manager.write().await;
-
-    // Get all players for this zone
-    let player_ids = pm.get_players_for_zone(&zone_seek.zone_id);
-
-    if player_ids.is_empty() {
-        log::debug!("No players found for zone {}, skipping seek update", zone_seek.zone_id);
-        return;
-    }
-
-    // seek_position is in seconds
-    let seek_position = match zone_seek.seek_position {
-        Some(pos) => pos,
-        None => {
-            log::debug!("No seek position in ZoneSeek event for zone {}", zone_seek.zone_id);
-            return;
-        }
-    };
-
-    log::debug!(
-        "Updating timeline for {} players in zone {} - position: {}s",
-        player_ids.len(),
-        zone_seek.zone_id,
-        seek_position
-    );
-
-    // Update timeline for all players in this zone
-    for player_id in player_ids {
-        // Get saved timeline or create default
-        let mut timeline = pm.get_timeline(player_id).cloned().unwrap_or_else(|| {
-            use fsct::TimelineInfo;
-            TimelineInfo {
-                position: Duration::from_secs(0),
-                update_time: SystemTime::now(),
-                duration: Duration::from_secs((zone_seek.queue_time_remaining + seek_position) as u64),
-                rate: 1.0,
-            }
-        });
-
-        // Update position, update_time, and duration
-        timeline.position = Duration::from_secs(seek_position as u64);
-        timeline.update_time = SystemTime::now();
-        timeline.duration = Duration::from_secs((zone_seek.queue_time_remaining + seek_position) as u64);
-        // Keep rate from saved state (playing/paused)
-
-        // Save updated timeline
-        pm.save_timeline(player_id, timeline.clone());
-
-        // Send update to driver
-        if let Err(e) = driver.update_player_timeline(player_id, Some(timeline)).await {
-            log::error!("Error updating player timeline for {:?}: {}", player_id, e);
-        }
-    }
-}

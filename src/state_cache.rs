@@ -1,0 +1,67 @@
+use fsct::{ManagedPlayerId, TimelineInfo};
+use std::collections::HashMap;
+
+/// Caches player state for efficient updates
+pub struct StateCache {
+    /// player_id -> last TimelineInfo - cached state for seek updates
+    player_timelines: HashMap<ManagedPlayerId, TimelineInfo>,
+}
+
+impl StateCache {
+    pub fn new() -> Self {
+        Self {
+            player_timelines: HashMap::new(),
+        }
+    }
+
+    /// Save timeline info for a player
+    pub fn save_timeline(&mut self, player_id: ManagedPlayerId, timeline: TimelineInfo) {
+        self.player_timelines.insert(player_id, timeline);
+    }
+
+    /// Get saved timeline info for a player
+    pub fn get_timeline(&self, player_id: ManagedPlayerId) -> Option<&TimelineInfo> {
+        self.player_timelines.get(&player_id)
+    }
+
+    /// Remove timeline for a player (called when player is unregistered)
+    pub fn remove_timeline(&mut self, player_id: ManagedPlayerId) {
+        self.player_timelines.remove(&player_id);
+    }
+
+    /// Clear all cached timelines
+    pub fn clear(&mut self) {
+        self.player_timelines.clear();
+    }
+}
+
+impl Default for StateCache {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::{Duration, SystemTime};
+
+    #[test]
+    fn test_timeline_cache() {
+        let mut cache = StateCache::new();
+        let player_id = ManagedPlayerId::new(1).unwrap();
+
+        let timeline = TimelineInfo {
+            position: Duration::from_secs(10),
+            update_time: SystemTime::now(),
+            duration: Duration::from_secs(300),
+            rate: 1.0,
+        };
+
+        cache.save_timeline(player_id, timeline.clone());
+        assert!(cache.get_timeline(player_id).is_some());
+
+        cache.remove_timeline(player_id);
+        assert!(cache.get_timeline(player_id).is_none());
+    }
+}

@@ -1,7 +1,6 @@
 use fsct::{FsctStatus, PlayerState, TrackMetadata, TimelineInfo};
-use roon_api::transport::{Zone, State};
+use roon_api::transport::{Zone, ZoneSeek, State};
 use std::time::{Duration, SystemTime};
-use log::debug;
 
 /// Convert Roon playback State to FSCT status
 pub fn convert_status(roon_state: &State) -> FsctStatus {
@@ -16,11 +15,12 @@ pub fn convert_status(roon_state: &State) -> FsctStatus {
 /// Convert Roon zone to FSCT TimelineInfo (for seek-only updates)
 pub fn convert_zone_to_timeline_info(zone: &Zone) -> Option<TimelineInfo> {
     zone.now_playing.as_ref().and_then(|np| {
+        // when position is not available, just ignore it and 0
         let position = np.seek_position.map(|seek_pos| Duration::from_secs_f64(seek_pos as f64)).unwrap_or_default();
+
+        // when length is not available, whole TimelineInfo is not available
         np.length.map(|len| {
             let duration = Duration::from_secs_f64(len as f64);
-
-            debug!("Zone {} - seek position: {}s, duration: {}s", zone.zone_id, position.as_secs_f64(), duration.as_secs_f64());
 
             TimelineInfo {
                 position,
@@ -29,6 +29,28 @@ pub fn convert_zone_to_timeline_info(zone: &Zone) -> Option<TimelineInfo> {
                 rate: if zone.state == State::Playing { 1.0 } else { 0.0 },
             }
         })
+    })
+}
+
+/// Build TimelineInfo from ZoneSeek, using cached timeline for rate preservation
+/// This is used for seek-only updates where we need to preserve the playback rate
+pub fn build_timeline_from_seek(
+    cached: Option<&TimelineInfo>,
+    zone_seek: &ZoneSeek,
+) -> Option<TimelineInfo> {
+    zone_seek.seek_position.map(|seek_pos| {
+        let position = Duration::from_secs(seek_pos as u64);
+        let duration = Duration::from_secs((zone_seek.queue_time_remaining + seek_pos) as u64);
+
+        // Use cached rate if available, otherwise default to 1.0
+        let rate = cached.map(|t| t.rate).unwrap_or(1.0);
+
+        TimelineInfo {
+            position,
+            update_time: SystemTime::now(),
+            duration,
+            rate,
+        }
     })
 }
 
