@@ -10,13 +10,13 @@ use fsct::FsctDriver;
 use fsct_client::IpcDriver;
 use mapping::Mappings;
 use player_manager::PlayerManager;
-use state_cache::StateCache;
-use zone_handler::ZoneEventHandler;
 use roon_api::{settings as roon_settings, CoreEvent, Info, Parsed, RoonApi, Services, Svc};
 use settings::{make_layout, mappings_to_settings, settings_to_mappings, ExtensionSettings};
+use state_cache::StateCache;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
+use zone_handler::ZoneEventHandler;
 
 const MAPPINGS_FILE: &str = "./fsct_roon_mappings.json";
 const ROON_STATE_FILE: &str = "./fsct_roon_state.json";
@@ -67,26 +67,28 @@ async fn main() -> Result<()> {
         // Get available FSCT devices
         let devices = tokio::task::block_in_place(|| {
             tokio::runtime::Handle::current().block_on(async {
-                driver_clone.get_detected_devices().await.unwrap_or_default()
+                driver_clone
+                    .get_detected_devices()
+                    .await
+                    .unwrap_or_default()
             })
         });
 
         // Get current mappings
         let current_mappings = tokio::task::block_in_place(|| {
-            tokio::runtime::Handle::current().block_on(async {
-                mappings_clone.read().await.all().clone()
-            })
+            tokio::runtime::Handle::current()
+                .block_on(async { mappings_clone.read().await.all().clone() })
         });
 
         // Get available outputs
         let outputs = tokio::task::block_in_place(|| {
-            tokio::runtime::Handle::current().block_on(async {
-                available_outputs_for_layout.read().await.clone()
-            })
+            tokio::runtime::Handle::current()
+                .block_on(async { available_outputs_for_layout.read().await.clone() })
         });
 
         // Convert settings or create from current mappings
-        let settings = settings.unwrap_or_else(|| mappings_to_settings(&current_mappings, &outputs));
+        let settings =
+            settings.unwrap_or_else(|| mappings_to_settings(&current_mappings, &outputs));
 
         make_layout(settings, devices, &current_mappings, outputs)
     };
@@ -98,8 +100,7 @@ async fn main() -> Result<()> {
         Services::Settings(settings_service),
     ]);
 
-    let provided: HashMap<String, Svc> =
-        HashMap::from([(roon_settings::SVCNAME.to_owned(), svc)]);
+    let provided: HashMap<String, Svc> = HashMap::from([(roon_settings::SVCNAME.to_owned(), svc)]);
 
     // Connection callback
     let on_connect = move || RoonApi::load_roon_state(ROON_STATE_FILE);
@@ -119,6 +120,7 @@ async fn main() -> Result<()> {
         let player_manager_h = player_manager.clone();
         let available_outputs_h = available_outputs_clone.clone();
         let zone_handler_h = zone_handler.clone();
+        let state_cache_h = state_cache.clone();
 
         // Roon message handler
         handlers.spawn(async move {
@@ -135,6 +137,7 @@ async fn main() -> Result<()> {
                             player_manager_h.clone(),
                             available_outputs_h.clone(),
                             zone_handler_h.clone(),
+                            state_cache_h.clone(),
                         )
                         .await;
                     }
@@ -191,6 +194,7 @@ async fn handle_message(
     player_manager: Arc<RwLock<PlayerManager>>,
     available_outputs: Arc<RwLock<Vec<roon_api::transport::Output>>>,
     zone_handler: Arc<ZoneEventHandler<IpcDriver>>,
+    state_cache: Arc<RwLock<StateCache>>,
 ) {
     match parsed {
         Parsed::RoonState(state) => {
@@ -206,12 +210,18 @@ async fn handle_message(
                 // Convert settings to mappings
                 let new_mappings = settings_to_mappings(&settings);
 
+                // Get old mappings before updating
+                let old_mappings = {
+                    let mappings_read = mappings.read().await;
+                    mappings_read.all().clone()
+                };
+
                 // Update mappings
                 {
                     let mut mappings_write = mappings.write().await;
                     mappings_write.clear();
-                    for (output_id, device_uuid) in new_mappings {
-                        mappings_write.set(output_id, device_uuid);
+                    for (output_id, device_uuid) in &new_mappings {
+                        mappings_write.set(output_id.clone(), *device_uuid);
                     }
 
                     // Save mappings immediately
@@ -220,9 +230,15 @@ async fn handle_message(
                     }
                 }
 
-                // Trigger re-evaluation of outputs
-                let outputs = available_outputs.read().await.clone();
-                handle_outputs_changed(outputs, mappings.clone(), driver.clone(), player_manager.clone()).await;
+                // Handle mapping changes: unregister old players, register new ones
+                handle_mapping_changes(
+                    old_mappings,
+                    new_mappings,
+                    driver.clone(),
+                    player_manager.clone(),
+                    state_cache.clone(),
+                )
+                .await;
             } else {
                 log::error!("Failed to deserialize settings");
             }
@@ -254,6 +270,98 @@ async fn handle_message(
     }
 }
 
+/// Handle changes in mappings - unregister old players, register new ones
+async fn handle_mapping_changes(
+    old_mappings: HashMap<String, uuid::Uuid>,
+    new_mappings: HashMap<String, uuid::Uuid>,
+    driver: Arc<IpcDriver>,
+    player_manager: Arc<RwLock<PlayerManager>>,
+    state_cache: Arc<RwLock<StateCache>>,
+) {
+    let mut pm = player_manager.write().await;
+    let cache = state_cache.read().await;
+
+    // Find outputs that were unmapped (in old but not in new)
+    for (old_output_id, _old_device_uuid) in &old_mappings {
+        if !new_mappings.contains_key(old_output_id) {
+            log::info!(
+                "Output {} was unmapped, unregistering player",
+                old_output_id
+            );
+            if let Err(e) = pm.unregister(&*driver, old_output_id).await {
+                log::error!("Error unregistering player for {}: {}", old_output_id, e);
+            }
+        }
+    }
+
+    // Find outputs with changed device mapping or newly mapped
+    for (output_id, new_device_uuid) in &new_mappings {
+        if let Some(old_device_uuid) = old_mappings.get(output_id) {
+            if old_device_uuid != new_device_uuid {
+                log::info!(
+                    "Output {} remapped from device {} to {}, re-registering player",
+                    output_id,
+                    old_device_uuid,
+                    new_device_uuid
+                );
+                // Unregister old player
+                if let Err(e) = pm.unregister(&*driver, output_id).await {
+                    log::error!("Error unregistering old player for {}: {}", output_id, e);
+                }
+                // Register new player
+                if let Err(e) = pm
+                    .register(&*driver, output_id.clone(), *new_device_uuid)
+                    .await
+                {
+                    log::error!("Error registering new player for {}: {}", output_id, e);
+                } else {
+                    // Send cached state to newly registered player
+                    if let Some(cached_state) = cache.get_output_state(output_id) {
+                        if let Some(player_id) = pm.get_player(output_id) {
+                            log::info!("Sending cached state to remapped player {:?}", player_id);
+                            if let Err(e) = driver
+                                .update_player_state(player_id, cached_state.clone())
+                                .await
+                            {
+                                log::error!("Error sending cached state to remapped player: {}", e);
+                            }
+                        }
+                    }
+                }
+            }
+        } else {
+            // New mapping - register player
+            log::info!(
+                "Output {} newly mapped to device {}, registering player",
+                output_id,
+                new_device_uuid
+            );
+            if let Err(e) = pm
+                .register(&*driver, output_id.clone(), *new_device_uuid)
+                .await
+            {
+                log::error!("Error registering player for {}: {}", output_id, e);
+            } else {
+                // Send cached state to newly registered player
+                if let Some(cached_state) = cache.get_output_state(output_id) {
+                    if let Some(player_id) = pm.get_player(output_id) {
+                        log::info!(
+                            "Sending cached state to newly mapped player {:?}",
+                            player_id
+                        );
+                        if let Err(e) = driver
+                            .update_player_state(player_id, cached_state.clone())
+                            .await
+                        {
+                            log::error!("Error sending cached state to newly mapped player: {}", e);
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
 async fn handle_outputs_changed(
     outputs: Vec<roon_api::transport::Output>,
     mappings: Arc<RwLock<Mappings>>,
@@ -269,9 +377,16 @@ async fn handle_outputs_changed(
     // Unregister players for outputs that are no longer available
     for registered_output in pm.registered_outputs() {
         if !available_outputs.contains(&registered_output) {
-            log::info!("Output {} no longer available, unregistering player", registered_output);
+            log::info!(
+                "Output {} no longer available, unregistering player",
+                registered_output
+            );
             if let Err(e) = pm.unregister(&*driver, &registered_output).await {
-                log::error!("Error unregistering player for {}: {}", registered_output, e);
+                log::error!(
+                    "Error unregistering player for {}: {}",
+                    registered_output,
+                    e
+                );
             }
         }
     }
@@ -282,7 +397,8 @@ async fn handle_outputs_changed(
             if !pm.has_player(&output.output_id) {
                 log::info!(
                     "Output {} is mapped to device {}, registering player",
-                    output.output_id, device_uuid
+                    output.output_id,
+                    device_uuid
                 );
                 if let Err(e) = pm
                     .register(&*driver, output.output_id.clone(), device_uuid)
@@ -294,4 +410,3 @@ async fn handle_outputs_changed(
         }
     }
 }
-

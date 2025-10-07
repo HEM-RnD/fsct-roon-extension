@@ -1,16 +1,19 @@
-use fsct::{ManagedPlayerId, TimelineInfo};
+use fsct::{ManagedPlayerId, PlayerState, TimelineInfo};
 use std::collections::HashMap;
 
 /// Caches player state for efficient updates
 pub struct StateCache {
     /// player_id -> last TimelineInfo - cached state for seek updates
     player_timelines: HashMap<ManagedPlayerId, TimelineInfo>,
+    /// output_id -> full PlayerState - cached state for remapping
+    output_states: HashMap<String, PlayerState>,
 }
 
 impl StateCache {
     pub fn new() -> Self {
         Self {
             player_timelines: HashMap::new(),
+            output_states: HashMap::new(),
         }
     }
 
@@ -29,9 +32,25 @@ impl StateCache {
         self.player_timelines.remove(&player_id);
     }
 
+    /// Save full player state for an output (for remapping)
+    pub fn save_output_state(&mut self, output_id: String, state: PlayerState) {
+        self.output_states.insert(output_id, state);
+    }
+
+    /// Get saved player state for an output
+    pub fn get_output_state(&self, output_id: &str) -> Option<&PlayerState> {
+        self.output_states.get(output_id)
+    }
+
+    /// Remove state for an output
+    pub fn remove_output_state(&mut self, output_id: &str) {
+        self.output_states.remove(output_id);
+    }
+
     /// Clear all cached timelines
     pub fn clear(&mut self) {
         self.player_timelines.clear();
+        self.output_states.clear();
     }
 }
 

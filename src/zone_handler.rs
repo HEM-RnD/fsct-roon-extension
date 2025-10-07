@@ -42,9 +42,12 @@ impl<D: FsctDriver> ZoneEventHandler<D> {
 
         // Update state for all outputs in this zone
         for output in &zone.outputs {
-            if let Some(player_id) = pm.get_player(&output.output_id) {
-                let player_state = convert_zone_to_player_state(&zone);
+            let player_state = convert_zone_to_player_state(&zone);
 
+            // Save full state for this output (for remapping)
+            cache.save_output_state(output.output_id.clone(), player_state.clone());
+
+            if let Some(player_id) = pm.get_player(&output.output_id) {
                 // Save timeline if present for future seek updates
                 if let Some(ref timeline) = player_state.timeline {
                     cache.save_timeline(player_id, timeline.clone());
