@@ -60,7 +60,7 @@ async fn main() -> Result<()> {
     // Setup settings callback
     let mappings_clone = mappings.clone();
     let driver_clone = driver.clone();
-    let available_outputs_clone = Arc::new(RwLock::new(Vec::new()));
+    let available_outputs_clone = Arc::new(RwLock::new(HashMap::new()));
     let available_outputs_for_layout = available_outputs_clone.clone();
 
     let get_layout = move |settings: Option<ExtensionSettings>| {
@@ -81,16 +81,19 @@ async fn main() -> Result<()> {
         });
 
         // Get available outputs
-        let outputs = tokio::task::block_in_place(|| {
+        let outputs_map = tokio::task::block_in_place(|| {
             tokio::runtime::Handle::current()
                 .block_on(async { available_outputs_for_layout.read().await.clone() })
         });
 
+        // Convert HashMap to Vec for function calls
+        let outputs_vec: Vec<roon_api::transport::Output> = outputs_map.values().cloned().collect();
+
         // Convert settings or create from current mappings
         let settings =
-            settings.unwrap_or_else(|| mappings_to_settings(&current_mappings, &outputs));
+            settings.unwrap_or_else(|| mappings_to_settings(&current_mappings, &outputs_vec));
 
-        make_layout(settings, devices, &current_mappings, outputs)
+        make_layout(settings, devices, &current_mappings, outputs_vec)
     };
 
     let (svc, settings_service) = roon_settings::Settings::new(&roon, Box::new(get_layout));
@@ -192,7 +195,7 @@ async fn handle_message(
     mappings: Arc<RwLock<Mappings>>,
     driver: Arc<IpcDriver>,
     player_manager: Arc<RwLock<PlayerManager>>,
-    available_outputs: Arc<RwLock<Vec<roon_api::transport::Output>>>,
+    available_outputs: Arc<RwLock<HashMap<String, roon_api::transport::Output>>>,
     zone_handler: Arc<ZoneEventHandler<IpcDriver>>,
     state_cache: Arc<RwLock<StateCache>>,
 ) {
@@ -244,18 +247,33 @@ async fn handle_message(
             }
         }
         Parsed::Outputs(outputs) => {
-            log::info!("Outputs changed: {} outputs", outputs.len());
+            log::info!("Outputs changed: {:#?}", outputs);
 
             // Update available outputs for settings UI
-            {
+            let outputs_map = {
                 let mut available_outputs_write = available_outputs.write().await;
-                *available_outputs_write = outputs.clone();
-            }
+                for output in outputs {
+                available_outputs_write.insert(output.output_id.clone(), output);
+                }
+                available_outputs_write.clone()
+            };
 
-            handle_outputs_changed(outputs, mappings, driver, player_manager).await;
+            handle_outputs_changed(outputs_map, mappings, driver, player_manager).await;
+        }
+        Parsed::OutputsRemoved(removed_outputs) => {
+            log::info!("Outputs removed: {:?}", removed_outputs);
+            // Update available outputs for settings UI
+            let outputs_map = {
+                let mut available_outputs_write = available_outputs.write().await;
+                for output_id in removed_outputs {
+                    available_outputs_write.remove(&output_id);
+                }
+                available_outputs_write.clone()
+            };
+            handle_outputs_changed(outputs_map, mappings, driver, player_manager).await;
         }
         Parsed::Zones(zones) => {
-            log::info!("Zones changed: {} zones", zones.len());
+            // log::info!("Zones changed: {:#?}", zones);
             for zone in zones {
                 zone_handler.handle_zone_changed(zone).await;
             }
@@ -363,7 +381,7 @@ async fn handle_mapping_changes(
 }
 
 async fn handle_outputs_changed(
-    outputs: Vec<roon_api::transport::Output>,
+    outputs: HashMap<String, roon_api::transport::Output>,
     mappings: Arc<RwLock<Mappings>>,
     driver: Arc<IpcDriver>,
     player_manager: Arc<RwLock<PlayerManager>>,
@@ -372,11 +390,11 @@ async fn handle_outputs_changed(
     let mut pm = player_manager.write().await;
 
     // Get list of currently available output IDs
-    let available_outputs: Vec<String> = outputs.iter().map(|o| o.output_id.clone()).collect();
+    let available_output_ids: Vec<String> = outputs.keys().cloned().collect();
 
     // Unregister players for outputs that are no longer available
     for registered_output in pm.registered_outputs() {
-        if !available_outputs.contains(&registered_output) {
+        if !available_output_ids.contains(&registered_output) {
             log::info!(
                 "Output {} no longer available, unregistering player",
                 registered_output
@@ -392,16 +410,16 @@ async fn handle_outputs_changed(
     }
 
     // Register players for newly available mapped outputs
-    for output in outputs {
-        if let Some(device_uuid) = mappings_read.get(&output.output_id) {
-            if !pm.has_player(&output.output_id) {
+    for (output_id, _output) in outputs {
+        if let Some(device_uuid) = mappings_read.get(&output_id) {
+            if !pm.has_player(&output_id) {
                 log::info!(
                     "Output {} is mapped to device {}, registering player",
-                    output.output_id,
+                    output_id,
                     device_uuid
                 );
                 if let Err(e) = pm
-                    .register(&*driver, output.output_id.clone(), device_uuid)
+                    .register(&*driver, output_id.clone(), device_uuid)
                     .await
                 {
                     log::error!("Error registering player: {}", e);
