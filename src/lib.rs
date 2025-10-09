@@ -1,5 +1,6 @@
 pub mod conversions;
 pub mod mapping;
+pub mod output_manager;
 pub mod player_manager;
 pub mod settings;
 pub mod state_cache;
