@@ -28,6 +28,7 @@ impl StateCache {
     }
 
     /// Remove timeline for a player (called when player is unregistered)
+    #[allow(dead_code)]
     pub fn remove_timeline(&mut self, player_id: ManagedPlayerId) {
         self.player_timelines.remove(&player_id);
     }
@@ -43,11 +44,13 @@ impl StateCache {
     }
 
     /// Remove state for an output
+    #[allow(dead_code)]
     pub fn remove_output_state(&mut self, output_id: &str) {
         self.output_states.remove(output_id);
     }
 
     /// Clear all cached timelines
+    #[allow(dead_code)]
     pub fn clear(&mut self) {
         self.player_timelines.clear();
         self.output_states.clear();

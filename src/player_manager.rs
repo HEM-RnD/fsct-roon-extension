@@ -94,6 +94,7 @@ impl PlayerManager {
     }
 
     /// Get count of registered players
+    #[allow(dead_code)]
     pub fn count(&self) -> usize {
         self.players.len()
     }

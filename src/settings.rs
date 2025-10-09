@@ -38,6 +38,27 @@ fn format_device_second_line_display(device: &DeviceInfo) -> String {
     format!("S/N: {}", sn)
 }
 
+/// Create dropdown options: "Not mapped" + all available outputs
+fn create_output_dropdown_options(available_outputs: &[roon_api::transport::Output]) -> Vec<BoxedSerTrait> {
+    let mut dropdown_values: Vec<BoxedSerTrait> = Vec::new();
+
+    // Add "Not mapped" option first
+    dropdown_values.push(Box::new(OutputOption {
+        title: "Not mapped".to_string(),
+        value: UNMAPPED_OUTPUT_ID.to_string(),
+    }));
+
+    // Add all available Roon outputs
+    for output in available_outputs {
+        dropdown_values.push(Box::new(OutputOption {
+            title: output.display_name.clone(),
+            value: output.output_id.clone(),
+        }));
+    }
+
+    dropdown_values
+}
+
 /// Create settings layout
 /// Lists all FSCT devices (detected + previously mapped but not detected)
 /// For each device, provides a dropdown with available Roon outputs
@@ -116,22 +137,8 @@ pub fn make_layout(
 
                 let setting_key = format!("device_{}", device_uuid);
 
-                // Create dropdown options: "Not mapped" + all available outputs
-                let mut dropdown_values: Vec<BoxedSerTrait> = Vec::new();
-
-                // Add "Not mapped" option first
-                dropdown_values.push(Box::new(OutputOption {
-                    title: "Not mapped".to_string(),
-                    value: UNMAPPED_OUTPUT_ID.to_string(),
-                }));
-
-                // Add all available Roon outputs
-                for output in &available_outputs {
-                    dropdown_values.push(Box::new(OutputOption {
-                        title: output.display_name.clone(),
-                        value: output.output_id.clone(),
-                    }));
-                }
+                // Create dropdown options
+                let dropdown_values = create_output_dropdown_options(&available_outputs);
 
                 detected_widgets.push(Widget::Dropdown(Dropdown {
                     title: Box::leak(device_display.into_boxed_str()),
@@ -156,22 +163,8 @@ pub fn make_layout(
             for device_uuid in &disconnected_devices {
                 let setting_key = format!("device_{}", device_uuid);
 
-                // Create dropdown options: "Not mapped" + all available outputs
-                let mut dropdown_values: Vec<BoxedSerTrait> = Vec::new();
-
-                // Add "Not mapped" option first
-                dropdown_values.push(Box::new(OutputOption {
-                    title: "Not mapped".to_string(),
-                    value: UNMAPPED_OUTPUT_ID.to_string(),
-                }));
-
-                // Add all available Roon outputs
-                for output in &available_outputs {
-                    dropdown_values.push(Box::new(OutputOption {
-                        title: output.display_name.clone(),
-                        value: output.output_id.clone(),
-                    }));
-                }
+                // Create dropdown options
+                let dropdown_values = create_output_dropdown_options(&available_outputs);
 
                 disconnected_widgets.push(Widget::Dropdown(Dropdown {
                     title: Box::leak(format!("Device {}", device_uuid).into_boxed_str()),

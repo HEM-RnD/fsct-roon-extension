@@ -46,6 +46,7 @@ impl Mappings {
     }
 
     /// Remove mapping for output
+    #[allow(dead_code)]
     pub fn remove(&mut self, output_id: &str) -> bool {
         self.map.remove(output_id).is_some()
     }
@@ -61,6 +62,7 @@ impl Mappings {
     }
 
     /// Check if output has mapping
+    #[allow(dead_code)]
     pub fn has(&self, output_id: &str) -> bool {
         self.map.contains_key(output_id)
     }
@@ -101,6 +103,74 @@ mod tests {
         let loaded = Mappings::load(temp_file).unwrap();
         assert_eq!(loaded.get("output1"), Some(uuid));
 
+        let _ = fs::remove_file(temp_file);
+    }
+
+    #[test]
+    fn test_mappings_saved_after_change() {
+        // Test that verifies mappings are persisted after modification
+        let temp_file = "./test_mappings_after_change.json";
+
+        // Start with empty mappings
+        let mut mappings = Mappings::new();
+
+        // Simulate settings change - add multiple mappings
+        let uuid1 = Uuid::new_v4();
+        let uuid2 = Uuid::new_v4();
+        let uuid3 = Uuid::new_v4();
+
+        mappings.set("output_zone1".to_string(), uuid1);
+        mappings.set("output_zone2".to_string(), uuid2);
+        mappings.set("output_zone3".to_string(), uuid3);
+
+        // Save after settings change (this is what happens in main.rs after SettingsSaved)
+        mappings.save(temp_file).unwrap();
+
+        // Verify file exists and contains correct data
+        assert!(std::path::Path::new(temp_file).exists(), "Mappings file should exist after save");
+
+        // Load from file to verify persistence
+        let loaded = Mappings::load(temp_file).unwrap();
+        assert_eq!(loaded.get("output_zone1"), Some(uuid1));
+        assert_eq!(loaded.get("output_zone2"), Some(uuid2));
+        assert_eq!(loaded.get("output_zone3"), Some(uuid3));
+
+        // Simulate another settings change - modify existing mapping
+        let mut mappings2 = loaded;
+        let new_uuid = Uuid::new_v4();
+        mappings2.set("output_zone2".to_string(), new_uuid);
+        mappings2.save(temp_file).unwrap();
+
+        // Verify the change was persisted
+        let loaded2 = Mappings::load(temp_file).unwrap();
+        assert_eq!(loaded2.get("output_zone1"), Some(uuid1));
+        assert_eq!(loaded2.get("output_zone2"), Some(new_uuid)); // Changed value
+        assert_eq!(loaded2.get("output_zone3"), Some(uuid3));
+
+        // Cleanup
+        let _ = fs::remove_file(temp_file);
+    }
+
+    #[test]
+    fn test_clear_and_save() {
+        // Test that clearing mappings (e.g., unmapping all) persists correctly
+        let temp_file = "./test_mappings_clear.json";
+
+        // Create mappings with some data
+        let mut mappings = Mappings::new();
+        mappings.set("output1".to_string(), Uuid::new_v4());
+        mappings.set("output2".to_string(), Uuid::new_v4());
+        mappings.save(temp_file).unwrap();
+
+        // Clear all mappings (simulates user unmapping everything)
+        mappings.clear();
+        mappings.save(temp_file).unwrap();
+
+        // Verify empty mappings were saved
+        let loaded = Mappings::load(temp_file).unwrap();
+        assert_eq!(loaded.all().len(), 0, "Mappings should be empty after clear and save");
+
+        // Cleanup
         let _ = fs::remove_file(temp_file);
     }
 }
