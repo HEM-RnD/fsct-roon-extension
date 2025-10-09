@@ -90,6 +90,6 @@ mod tests {
         assert_eq!(convert_status(&State::Playing), FsctStatus::Playing);
         assert_eq!(convert_status(&State::Paused), FsctStatus::Paused);
         assert_eq!(convert_status(&State::Stopped), FsctStatus::Stopped);
-        assert_eq!(convert_status(&State::Loading), FsctStatus::Stopped);
+        assert_eq!(convert_status(&State::Loading), FsctStatus::Buffering);
     }
 }
