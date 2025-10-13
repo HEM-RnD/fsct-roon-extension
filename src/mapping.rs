@@ -3,19 +3,26 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
+use std::sync::Mutex;
 use uuid::Uuid;
 
-/// Stores mappings between Roon output IDs and FSCT device UUIDs
+/// Internal data structure for serialization
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
+struct MappingsData {
+    map: HashMap<String, Uuid>,
+}
+
+/// Stores mappings between Roon output IDs and FSCT device UUIDs
+/// Uses interior mutability to allow concurrent access without external locking
 pub struct Mappings {
     /// output_id -> device_uuid
-    map: HashMap<String, Uuid>,
+    data: Mutex<MappingsData>,
 }
 
 impl Mappings {
     pub fn new() -> Self {
         Self {
-            map: HashMap::new(),
+            data: Mutex::new(MappingsData { map: HashMap::new() }),
         }
     }
 
@@ -27,49 +34,58 @@ impl Mappings {
         }
 
         let content = fs::read_to_string(path)?;
-        let mappings: Self = serde_json::from_str(&content)?;
-        log::info!("Loaded {} mappings from {}", mappings.map.len(), path);
-        Ok(mappings)
+        let mappings_data: MappingsData = serde_json::from_str(&content)?;
+        log::info!("Loaded {} mappings from {}", mappings_data.map.len(), path);
+        Ok(Self {
+            data: Mutex::new(mappings_data),
+        })
     }
 
     /// Save mappings to file
     pub fn save(&self, path: &str) -> Result<()> {
-        let content = serde_json::to_string_pretty(&self)?;
+        let data = self.data.lock().unwrap();
+        let content = serde_json::to_string_pretty(&*data)?;
         fs::write(path, content)?;
-        log::debug!("Saved {} mappings to {}", self.map.len(), path);
+        log::debug!("Saved {} mappings to {}", data.map.len(), path);
         Ok(())
     }
 
     /// Set mapping for output
-    pub fn set(&mut self, output_id: String, device_uuid: Uuid) {
-        self.map.insert(output_id, device_uuid);
+    pub fn set(&self, output_id: String, device_uuid: Uuid) {
+        self.data.lock().unwrap().map.insert(output_id, device_uuid);
     }
 
     /// Remove mapping for output
     #[allow(dead_code)]
-    pub fn remove(&mut self, output_id: &str) -> bool {
-        self.map.remove(output_id).is_some()
+    pub fn remove(&self, output_id: &str) -> bool {
+        self.data.lock().unwrap().map.remove(output_id).is_some()
     }
 
     /// Get device UUID for output
     pub fn get(&self, output_id: &str) -> Option<Uuid> {
-        self.map.get(output_id).copied()
+        self.data.lock().unwrap().map.get(output_id).copied()
     }
 
-    /// Get all mappings
-    pub fn all(&self) -> &HashMap<String, Uuid> {
-        &self.map
+    /// Get all mappings (returns a clone)
+    pub fn all(&self) -> HashMap<String, Uuid> {
+        self.data.lock().unwrap().map.clone()
     }
 
     /// Check if output has mapping
     #[allow(dead_code)]
     pub fn has(&self, output_id: &str) -> bool {
-        self.map.contains_key(output_id)
+        self.data.lock().unwrap().map.contains_key(output_id)
     }
 
     /// Clear all mappings
-    pub fn clear(&mut self) {
-        self.map.clear();
+    pub fn clear(&self) {
+        self.data.lock().unwrap().map.clear();
+    }
+}
+
+impl Default for Mappings {
+    fn default() -> Self {
+        Self::new()
     }
 }
 

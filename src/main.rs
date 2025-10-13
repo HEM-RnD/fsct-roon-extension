@@ -17,7 +17,6 @@ use settings::{make_layout, mappings_to_settings, settings_to_mappings, Extensio
 use state_cache::StateCache;
 use std::collections::HashMap;
 use std::sync::Arc;
-use tokio::sync::Mutex;
 use zone_handler::ZoneEventHandler;
 
 const MAPPINGS_FILE: &str = "./fsct_roon_mappings.json";
@@ -29,7 +28,7 @@ async fn main() -> Result<()> {
     log::info!("=== FSCT-Roon Extension Starting ===");
 
     // Load mappings
-    let mappings = Arc::new(Mutex::new(Mappings::load(MAPPINGS_FILE)?));
+    let mappings = Arc::new(Mappings::load(MAPPINGS_FILE)?);
     log::info!("Loaded mappings");
 
     // Connect to FSCT driver
@@ -37,17 +36,17 @@ async fn main() -> Result<()> {
     log::info!("Connected to FSCT driver");
 
     // Player manager and state cache
-    let player_manager = Arc::new(Mutex::new(PlayerManager::new()));
-    let state_cache = Arc::new(Mutex::new(StateCache::new()));
+    let player_manager = Arc::new(PlayerManager::new());
+    let state_cache = Arc::new(StateCache::new());
     log::info!("Player manager and state cache initialized");
 
     // Output manager
-    let output_manager = Arc::new(Mutex::new(OutputManager::new(
+    let output_manager = Arc::new(OutputManager::new(
         mappings.clone(),
         player_manager.clone(),
         state_cache.clone(),
         driver.clone(),
-    )));
+    ));
     log::info!("Output manager initialized");
 
     // Zone event handler
@@ -85,18 +84,11 @@ async fn main() -> Result<()> {
         });
 
         // Get current mappings
-        let current_mappings = tokio::task::block_in_place(|| {
-            tokio::runtime::Handle::current()
-                .block_on(async { mappings_clone.lock().await.all().clone() })
-        });
+        let current_mappings = mappings_clone.all();
 
         // Get available outputs from output manager
-        let outputs_vec: Vec<roon_api::transport::Output> = tokio::task::block_in_place(|| {
-            tokio::runtime::Handle::current().block_on(async {
-                let om = output_manager_for_layout.lock().await;
-                om.get_available_outputs().values().cloned().collect()
-            })
-        });
+        let outputs_vec: Vec<roon_api::transport::Output> =
+            output_manager_for_layout.get_available_outputs().values().cloned().collect();
 
         // Convert settings or create from current mappings
         let settings =
@@ -182,8 +174,8 @@ async fn handle_core_event(event: CoreEvent) {
 async fn handle_message(
     _msg: serde_json::Value,
     parsed: Parsed,
-    mappings: Arc<Mutex<Mappings>>,
-    output_manager: Arc<Mutex<OutputManager<IpcDriver>>>,
+    mappings: Arc<Mappings>,
+    output_manager: Arc<OutputManager<IpcDriver>>,
     zone_handler: Arc<ZoneEventHandler<IpcDriver>>,
 ) {
     match parsed {
@@ -202,17 +194,11 @@ async fn handle_message(
 
                 // Handle mapping changes via output manager (spawn to avoid blocking)
                 let om_clone = output_manager.clone();
+                let mappings_clone = mappings.clone();
                 tokio::spawn(async move {
-                    {
-                        let mut om = om_clone.lock().await;
-                        om.handle_mappings_changed(new_mappings).await;
-                    }
-                    {
-                        let mappings_lock = mappings.lock().await;
-                        if let Err(e) = mappings_lock.save(MAPPINGS_FILE) {
-                            log::error!("Error saving mappings: {}", e);
-                        }
-                        // Lock dropped here automatically
+                    om_clone.handle_mappings_changed(new_mappings).await;
+                    if let Err(e) = mappings_clone.save(MAPPINGS_FILE) {
+                        log::error!("Error saving mappings: {}", e);
                     }
                 });
 
@@ -225,8 +211,7 @@ async fn handle_message(
             // Spawn task to avoid blocking event loop
             let om_clone = output_manager.clone();
             tokio::spawn(async move {
-                let mut om = om_clone.lock().await;
-                om.handle_outputs_changed(outputs).await;
+                om_clone.handle_outputs_changed(outputs).await;
             });
         }
         Parsed::OutputsRemoved(removed_outputs) => {
@@ -234,8 +219,7 @@ async fn handle_message(
             // Spawn task to avoid blocking event loop
             let om_clone = output_manager.clone();
             tokio::spawn(async move {
-                let mut om = om_clone.lock().await;
-                om.handle_outputs_removed(removed_outputs).await;
+                om_clone.handle_outputs_removed(removed_outputs).await;
             });
         }
         Parsed::Zones(zones) => {

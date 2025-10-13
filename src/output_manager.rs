@@ -4,8 +4,7 @@ use crate::state_cache::StateCache;
 use fsct::FsctDriver;
 use roon_api::transport::Output;
 use std::collections::HashMap;
-use std::sync::Arc;
-use tokio::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use uuid::Uuid;
 
 /// Manages Roon outputs and their player registrations
@@ -16,26 +15,26 @@ use uuid::Uuid;
 /// - Handle mapping changes between outputs and devices
 pub struct OutputManager<D: FsctDriver> {
     /// Currently available Roon outputs
-    available_outputs: HashMap<String, Output>,
+    available_outputs: Mutex<HashMap<String, Output>>,
     /// Mappings between output IDs and device UUIDs
-    mappings: Arc<Mutex<Mappings>>,
+    mappings: Arc<Mappings>,
     /// FSCT player manager
-    player_manager: Arc<Mutex<PlayerManager>>,
+    player_manager: Arc<PlayerManager>,
     /// State cache for preserving player states
-    state_cache: Arc<Mutex<StateCache>>,
+    state_cache: Arc<StateCache>,
     /// FSCT driver for player operations
     driver: Arc<D>,
 }
 
 impl<D: FsctDriver> OutputManager<D> {
     pub fn new(
-        mappings: Arc<Mutex<Mappings>>,
-        player_manager: Arc<Mutex<PlayerManager>>,
-        state_cache: Arc<Mutex<StateCache>>,
+        mappings: Arc<Mappings>,
+        player_manager: Arc<PlayerManager>,
+        state_cache: Arc<StateCache>,
         driver: Arc<D>,
     ) -> Self {
         Self {
-            available_outputs: HashMap::new(),
+            available_outputs: Mutex::new(HashMap::new()),
             mappings,
             player_manager,
             state_cache,
@@ -44,18 +43,21 @@ impl<D: FsctDriver> OutputManager<D> {
     }
 
     /// Get all currently available outputs (for settings UI)
-    pub fn get_available_outputs(&self) -> &HashMap<String, Output> {
-        &self.available_outputs
+    pub fn get_available_outputs(&self) -> HashMap<String, Output> {
+        self.available_outputs.lock().unwrap().clone()
     }
 
     /// Handle Roon outputs changed event
     /// Updates available outputs and registers/unregisters players as needed
-    pub async fn handle_outputs_changed(&mut self, outputs: Vec<Output>) {
+    pub async fn handle_outputs_changed(&self, outputs: Vec<Output>) {
         log::info!("Outputs changed: {} outputs", outputs.len());
 
         // Update available outputs
-        for output in outputs {
-            self.available_outputs.insert(output.output_id.clone(), output);
+        {
+            let mut available = self.available_outputs.lock().unwrap();
+            for output in outputs {
+                available.insert(output.output_id.clone(), output);
+            }
         }
 
         self.sync_players().await;
@@ -63,12 +65,15 @@ impl<D: FsctDriver> OutputManager<D> {
 
     /// Handle Roon outputs removed event
     /// Removes outputs from tracking and unregisters associated players
-    pub async fn handle_outputs_removed(&mut self, removed_output_ids: Vec<String>) {
+    pub async fn handle_outputs_removed(&self, removed_output_ids: Vec<String>) {
         log::info!("Outputs removed: {:?}", removed_output_ids);
 
         // Remove from available outputs
-        for output_id in removed_output_ids {
-            self.available_outputs.remove(&output_id);
+        {
+            let mut available = self.available_outputs.lock().unwrap();
+            for output_id in removed_output_ids {
+                available.remove(&output_id);
+            }
         }
 
         self.sync_players().await;
@@ -76,22 +81,16 @@ impl<D: FsctDriver> OutputManager<D> {
 
     /// Handle mapping changes from settings
     /// Registers/unregisters/re-registers players based on new mappings
-    pub async fn handle_mappings_changed(&mut self, new_mappings: HashMap<String, Uuid>) {
+    pub async fn handle_mappings_changed(&self, new_mappings: HashMap<String, Uuid>) {
         log::info!("Mappings changed, updating player registrations");
 
         // Get old mappings
-        let old_mappings = {
-            let mappings_lock = self.mappings.lock().await;
-            mappings_lock.all().clone()
-        };
+        let old_mappings = self.mappings.all();
 
         // Update mappings
-        {
-            let mut mappings_lock = self.mappings.lock().await;
-            mappings_lock.clear();
-            for (output_id, device_uuid) in &new_mappings {
-                mappings_lock.set(output_id.clone(), *device_uuid);
-            }
+        self.mappings.clear();
+        for (output_id, device_uuid) in &new_mappings {
+            self.mappings.set(output_id.clone(), *device_uuid);
         }
 
         // Handle the changes
@@ -104,13 +103,11 @@ impl<D: FsctDriver> OutputManager<D> {
     async fn sync_players(&self) {
         // Collect operations to perform (while holding locks)
         let (to_unregister, to_register): (Vec<String>, Vec<(String, uuid::Uuid)>) = {
-            let mappings_lock = self.mappings.lock().await;
-            let pm = self.player_manager.lock().await;
-
-            let available_output_ids: Vec<String> = self.available_outputs.keys().cloned().collect();
+            let available = self.available_outputs.lock().unwrap();
+            let available_output_ids: Vec<String> = available.keys().cloned().collect();
 
             // Find players to unregister (outputs no longer available)
-            let unregister: Vec<String> = pm.registered_outputs()
+            let unregister: Vec<String> = self.player_manager.registered_outputs()
                 .into_iter()
                 .filter(|output| !available_output_ids.contains(output))
                 .collect();
@@ -119,8 +116,8 @@ impl<D: FsctDriver> OutputManager<D> {
             let register: Vec<(String, uuid::Uuid)> = available_output_ids
                 .into_iter()
                 .filter_map(|output_id| {
-                    if !pm.has_player(&output_id) {
-                        mappings_lock.get(&output_id).map(|device_uuid| (output_id, device_uuid))
+                    if !self.player_manager.has_player(&output_id) {
+                        self.mappings.get(&output_id).map(|device_uuid| (output_id, device_uuid))
                     } else {
                         None
                     }
@@ -133,16 +130,14 @@ impl<D: FsctDriver> OutputManager<D> {
         // Execute operations (outside of locks)
         for output_id in to_unregister {
             log::info!("Output {} no longer available, unregistering player", output_id);
-            let mut pm = self.player_manager.lock().await;
-            if let Err(e) = pm.unregister(&*self.driver, &output_id).await {
+            if let Err(e) = self.player_manager.unregister(&*self.driver, &output_id).await {
                 log::error!("Error unregistering player for {}: {}", output_id, e);
             }
         }
 
         for (output_id, device_uuid) in to_register {
             log::info!("Output {} is mapped to device {}, registering player", output_id, device_uuid);
-            let mut pm = self.player_manager.lock().await;
-            if let Err(e) = pm.register(&*self.driver, output_id.clone(), device_uuid).await {
+            if let Err(e) = self.player_manager.register(&*self.driver, output_id.clone(), device_uuid).await {
                 log::error!("Error registering player for {}: {}", output_id, e);
             }
         }
@@ -161,8 +156,7 @@ impl<D: FsctDriver> OutputManager<D> {
         for (old_output_id, _) in &old_mappings {
             if !new_mappings.contains_key(old_output_id) {
                 log::info!("Output {} was unmapped, unregistering player", old_output_id);
-                let mut pm = self.player_manager.lock().await;
-                if let Err(e) = pm.unregister(&*self.driver, old_output_id).await {
+                if let Err(e) = self.player_manager.unregister(&*self.driver, old_output_id).await {
                     log::error!("Error unregistering player for {}: {}", old_output_id, e);
                 }
             }
@@ -179,37 +173,26 @@ impl<D: FsctDriver> OutputManager<D> {
                     );
 
                     // Unregister old player
-                    {
-                        let mut pm = self.player_manager.lock().await;
-                        if let Err(e) = pm.unregister(&*self.driver, output_id).await {
-                            log::error!("Error unregistering old player for {}: {}", output_id, e);
-                        }
+                    if let Err(e) = self.player_manager.unregister(&*self.driver, output_id).await {
+                        log::error!("Error unregistering old player for {}: {}", output_id, e);
                     }
 
                     // Register new player
-                    {
-                        let mut pm = self.player_manager.lock().await;
-                        if let Err(e) = pm.register(&*self.driver, output_id.clone(), *new_device_uuid).await {
-                            log::error!("Error registering new player for {}: {}", output_id, e);
-                        } else {
-                            // Send cached state
-                            drop(pm); // Drop lock before sending state
-                            self.send_cached_state_to_player(output_id).await;
-                        }
+                    if let Err(e) = self.player_manager.register(&*self.driver, output_id.clone(), *new_device_uuid).await {
+                        log::error!("Error registering new player for {}: {}", output_id, e);
+                    } else {
+                        // Send cached state
+                        self.send_cached_state_to_player(output_id).await;
                     }
                 }
             } else {
                 // New mapping - register player
                 log::info!("Output {} newly mapped to device {}, registering player", output_id, new_device_uuid);
-                {
-                    let mut pm = self.player_manager.lock().await;
-                    if let Err(e) = pm.register(&*self.driver, output_id.clone(), *new_device_uuid).await {
-                        log::error!("Error registering player for {}: {}", output_id, e);
-                    } else {
-                        // Send cached state
-                        drop(pm); // Drop lock before sending state
-                        self.send_cached_state_to_player(output_id).await;
-                    }
+                if let Err(e) = self.player_manager.register(&*self.driver, output_id.clone(), *new_device_uuid).await {
+                    log::error!("Error registering player for {}: {}", output_id, e);
+                } else {
+                    // Send cached state
+                    self.send_cached_state_to_player(output_id).await;
                 }
             }
         }
@@ -217,19 +200,17 @@ impl<D: FsctDriver> OutputManager<D> {
 
     /// Send cached state to a player (helper to avoid duplication)
     async fn send_cached_state_to_player(&self, output_id: &str) {
-        let (player_id, cached_state) = {
-            let pm = self.player_manager.lock().await;
-            let cache = self.state_cache.lock().await;
+        let player_id = self.player_manager.get_player(output_id);
+        let cached_state = self.state_cache.get_output_state(output_id);
 
-            match (pm.get_player(output_id), cache.get_output_state(output_id)) {
-                (Some(player_id), Some(state)) => (player_id, state.clone()),
-                _ => return,
+        match (player_id, cached_state) {
+            (Some(player_id), Some(state)) => {
+                log::info!("Sending cached state to player {:?} for output {}", player_id, output_id);
+                if let Err(e) = self.driver.update_player_state(player_id, state).await {
+                    log::error!("Error sending cached state to player {:?}: {}", player_id, e);
+                }
             }
-        }; // Locks dropped here
-
-        log::info!("Sending cached state to player {:?} for output {}", player_id, output_id);
-        if let Err(e) = self.driver.update_player_state(player_id, cached_state).await {
-            log::error!("Error sending cached state to player {:?}: {}", player_id, e);
+            _ => {}
         }
     }
 }
@@ -242,15 +223,15 @@ mod tests {
 
     // Mock driver for testing
     struct MockDriver {
-        registered_players: Arc<Mutex<Vec<String>>>,
-        unregistered_players: Arc<Mutex<Vec<ManagedPlayerId>>>,
+        registered_players: Arc<std::sync::Mutex<Vec<String>>>,
+        unregistered_players: Arc<std::sync::Mutex<Vec<ManagedPlayerId>>>,
     }
 
     impl MockDriver {
         fn new() -> Self {
             Self {
-                registered_players: Arc::new(Mutex::new(Vec::new())),
-                unregistered_players: Arc::new(Mutex::new(Vec::new())),
+                registered_players: Arc::new(std::sync::Mutex::new(Vec::new())),
+                unregistered_players: Arc::new(std::sync::Mutex::new(Vec::new())),
             }
         }
     }
@@ -258,12 +239,12 @@ mod tests {
     #[async_trait::async_trait]
     impl FsctDriver for MockDriver {
         async fn register_player(&self, name: String) -> Result<ManagedPlayerId> {
-            self.registered_players.lock().await.push(name.clone());
+            self.registered_players.lock().unwrap().push(name.clone());
             Ok(ManagedPlayerId::new(1).unwrap())
         }
 
         async fn unregister_player(&self, player_id: ManagedPlayerId) -> Result<()> {
-            self.unregistered_players.lock().await.push(player_id);
+            self.unregistered_players.lock().unwrap().push(player_id);
             Ok(())
         }
 
@@ -341,12 +322,12 @@ mod tests {
 
     #[tokio::test]
     async fn test_handle_outputs_changed_tracks_outputs() {
-        let mappings = Arc::new(Mutex::new(Mappings::new()));
-        let player_manager = Arc::new(Mutex::new(PlayerManager::new()));
-        let state_cache = Arc::new(Mutex::new(StateCache::new()));
+        let mappings = Arc::new(Mappings::new());
+        let player_manager = Arc::new(PlayerManager::new());
+        let state_cache = Arc::new(StateCache::new());
         let driver = Arc::new(MockDriver::new());
 
-        let mut output_manager = OutputManager::new(
+        let output_manager = OutputManager::new(
             mappings,
             player_manager,
             state_cache,
@@ -360,19 +341,20 @@ mod tests {
 
         output_manager.handle_outputs_changed(outputs).await;
 
-        assert_eq!(output_manager.get_available_outputs().len(), 2);
-        assert!(output_manager.get_available_outputs().contains_key("output1"));
-        assert!(output_manager.get_available_outputs().contains_key("output2"));
+        let available = output_manager.get_available_outputs();
+        assert_eq!(available.len(), 2);
+        assert!(available.contains_key("output1"));
+        assert!(available.contains_key("output2"));
     }
 
     #[tokio::test]
     async fn test_handle_outputs_removed_removes_outputs() {
-        let mappings = Arc::new(Mutex::new(Mappings::new()));
-        let player_manager = Arc::new(Mutex::new(PlayerManager::new()));
-        let state_cache = Arc::new(Mutex::new(StateCache::new()));
+        let mappings = Arc::new(Mappings::new());
+        let player_manager = Arc::new(PlayerManager::new());
+        let state_cache = Arc::new(StateCache::new());
         let driver = Arc::new(MockDriver::new());
 
-        let mut output_manager = OutputManager::new(
+        let output_manager = OutputManager::new(
             mappings,
             player_manager,
             state_cache,
@@ -389,19 +371,20 @@ mod tests {
         // Remove one output
         output_manager.handle_outputs_removed(vec!["output1".to_string()]).await;
 
-        assert_eq!(output_manager.get_available_outputs().len(), 1);
-        assert!(!output_manager.get_available_outputs().contains_key("output1"));
-        assert!(output_manager.get_available_outputs().contains_key("output2"));
+        let available = output_manager.get_available_outputs();
+        assert_eq!(available.len(), 1);
+        assert!(!available.contains_key("output1"));
+        assert!(available.contains_key("output2"));
     }
 
     #[tokio::test]
     async fn test_handle_mappings_changed_registers_new_players() {
-        let mappings = Arc::new(Mutex::new(Mappings::new()));
-        let player_manager = Arc::new(Mutex::new(PlayerManager::new()));
-        let state_cache = Arc::new(Mutex::new(StateCache::new()));
+        let mappings = Arc::new(Mappings::new());
+        let player_manager = Arc::new(PlayerManager::new());
+        let state_cache = Arc::new(StateCache::new());
         let driver = Arc::new(MockDriver::new());
 
-        let mut output_manager = OutputManager::new(
+        let output_manager = OutputManager::new(
             mappings.clone(),
             player_manager.clone(),
             state_cache,
@@ -421,22 +404,20 @@ mod tests {
         output_manager.handle_mappings_changed(new_mappings).await;
 
         // Verify mapping was saved
-        let mappings_lock = mappings.lock().await;
-        assert_eq!(mappings_lock.get("output1"), Some(device_uuid));
+        assert_eq!(mappings.get("output1"), Some(device_uuid));
 
         // Verify player was registered
-        let pm = player_manager.lock().await;
-        assert!(pm.has_player("output1"));
+        assert!(player_manager.has_player("output1"));
     }
 
     #[tokio::test]
     async fn test_handle_mappings_changed_unregisters_unmapped_players() {
-        let mappings = Arc::new(Mutex::new(Mappings::new()));
-        let player_manager = Arc::new(Mutex::new(PlayerManager::new()));
-        let state_cache = Arc::new(Mutex::new(StateCache::new()));
+        let mappings = Arc::new(Mappings::new());
+        let player_manager = Arc::new(PlayerManager::new());
+        let state_cache = Arc::new(StateCache::new());
         let driver = Arc::new(MockDriver::new());
 
-        let mut output_manager = OutputManager::new(
+        let output_manager = OutputManager::new(
             mappings.clone(),
             player_manager.clone(),
             state_cache,
@@ -454,16 +435,12 @@ mod tests {
         output_manager.handle_mappings_changed(initial_mappings).await;
 
         // Verify player was registered
-        {
-            let pm = player_manager.lock().await;
-            assert!(pm.has_player("output1"));
-        }
+        assert!(player_manager.has_player("output1"));
 
         // Remove mapping (empty HashMap)
         output_manager.handle_mappings_changed(HashMap::new()).await;
 
         // Verify player was unregistered
-        let pm = player_manager.lock().await;
-        assert!(!pm.has_player("output1"));
+        assert!(!player_manager.has_player("output1"));
     }
 }
