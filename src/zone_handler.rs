@@ -38,15 +38,10 @@ impl<D: FsctDriver> ZoneEventHandler<D> {
         for output in &zone.outputs {
             let player_state = convert_zone_to_player_state(&zone);
 
-            // Save full state for this output (for remapping)
+            // Save full state for this output (includes timeline)
             self.state_cache.save_output_state(output.output_id.clone(), player_state.clone());
 
             if let Some(player_id) = self.player_manager.get_player(&output.output_id) {
-                // Save timeline if present for future seek updates
-                if let Some(ref timeline) = player_state.timeline {
-                    self.state_cache.save_timeline(player_id, timeline.clone());
-                }
-
                 log::debug!(
                     "Updating player {:?} for output {} - status: {:?}",
                     player_id, output.output_id, player_state.status
@@ -66,11 +61,11 @@ impl<D: FsctDriver> ZoneEventHandler<D> {
 
     /// Handle seek-only update (timeline position change)
     pub async fn handle_zone_seek(&self, zone_seek: ZoneSeek) {
-        // Get all players for this zone
-        let player_ids = self.player_manager.get_players_for_zone(&zone_seek.zone_id);
+        // Get all outputs for this zone
+        let output_ids = self.player_manager.get_outputs_for_zone(&zone_seek.zone_id);
 
-        if player_ids.is_empty() {
-            log::debug!("No players found for zone {}, skipping seek update", zone_seek.zone_id);
+        if output_ids.is_empty() {
+            log::debug!("No outputs found for zone {}, skipping seek update", zone_seek.zone_id);
             return;
         }
 
@@ -80,23 +75,27 @@ impl<D: FsctDriver> ZoneEventHandler<D> {
         }
 
         log::debug!(
-            "Updating timeline for {} players in zone {} - position: {}s",
-            player_ids.len(),
+            "Updating timeline for {} outputs in zone {} - position: {}s",
+            output_ids.len(),
             zone_seek.zone_id,
             zone_seek.seek_position.unwrap()
         );
 
-        // Collect timeline updates for all players in this zone
+        // Collect timeline updates for all outputs in this zone
         let mut timeline_updates = Vec::new();
-        for player_id in player_ids {
-            // Get cached timeline and build updated timeline from seek
-            let cached = self.state_cache.get_timeline(player_id);
+        for output_id in output_ids {
+            // Get cached timeline from output state and build updated timeline from seek
+            let cached = self.state_cache.get_timeline(&output_id);
             let timeline = build_timeline_from_seek(cached.as_ref(), &zone_seek);
 
             if let Some(timeline) = timeline {
-                // Save updated timeline
-                self.state_cache.save_timeline(player_id, timeline.clone());
-                timeline_updates.push((player_id, timeline));
+                // Update timeline in cached state
+                self.state_cache.update_timeline(&output_id, &timeline);
+
+                // If this output has a registered player, send the update
+                if let Some(player_id) = self.player_manager.get_player(&output_id) {
+                    timeline_updates.push((player_id, timeline));
+                }
             }
         }
 

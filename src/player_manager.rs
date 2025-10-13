@@ -111,7 +111,17 @@ impl PlayerManager {
         self.zone_outputs.lock().unwrap().insert(zone_id, output_ids);
     }
 
+    /// Get all output IDs for a zone
+    pub fn get_outputs_for_zone(&self, zone_id: &str) -> Vec<String> {
+        let zone_outputs = self.zone_outputs.lock().unwrap();
+        zone_outputs
+            .get(zone_id)
+            .cloned()
+            .unwrap_or_default()
+    }
+
     /// Get all player IDs for outputs in a zone
+    #[allow(dead_code)]
     pub fn get_players_for_zone(&self, zone_id: &str) -> Vec<ManagedPlayerId> {
         let zone_outputs = self.zone_outputs.lock().unwrap();
         let players = self.players.lock().unwrap();

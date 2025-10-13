@@ -95,7 +95,7 @@ mod tests {
 
     #[test]
     fn test_mapping_operations() {
-        let mut mappings = Mappings::new();
+        let mappings = Mappings::new();
         let uuid = Uuid::new_v4();
 
         mappings.set("output1".to_string(), uuid);
@@ -110,7 +110,7 @@ mod tests {
     #[test]
     fn test_save_load() {
         let temp_file = "./test_mappings_temp.json";
-        let mut mappings = Mappings::new();
+        let mappings = Mappings::new();
         let uuid = Uuid::new_v4();
 
         mappings.set("output1".to_string(), uuid);
@@ -128,7 +128,7 @@ mod tests {
         let temp_file = "./test_mappings_after_change.json";
 
         // Start with empty mappings
-        let mut mappings = Mappings::new();
+        let mappings = Mappings::new();
 
         // Simulate settings change - add multiple mappings
         let uuid1 = Uuid::new_v4();
@@ -152,7 +152,7 @@ mod tests {
         assert_eq!(loaded.get("output_zone3"), Some(uuid3));
 
         // Simulate another settings change - modify existing mapping
-        let mut mappings2 = loaded;
+        let mappings2 = loaded;
         let new_uuid = Uuid::new_v4();
         mappings2.set("output_zone2".to_string(), new_uuid);
         mappings2.save(temp_file).unwrap();
@@ -173,7 +173,7 @@ mod tests {
         let temp_file = "./test_mappings_clear.json";
 
         // Create mappings with some data
-        let mut mappings = Mappings::new();
+        let mappings = Mappings::new();
         mappings.set("output1".to_string(), Uuid::new_v4());
         mappings.set("output2".to_string(), Uuid::new_v4());
         mappings.save(temp_file).unwrap();
