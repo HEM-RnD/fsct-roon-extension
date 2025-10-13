@@ -1,10 +1,10 @@
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::fs;
 use std::path::Path;
 use std::sync::Mutex;
 use uuid::Uuid;
+use tokio::fs;
 
 /// Internal data structure for serialization
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -27,13 +27,13 @@ impl Mappings {
     }
 
     /// Load mappings from file
-    pub fn load(path: &str) -> Result<Self> {
+    pub async fn load(path: &str) -> Result<Self> {
         if !Path::new(path).exists() {
             log::info!("Mappings file not found, starting with empty mappings");
             return Ok(Self::new());
         }
 
-        let content = fs::read_to_string(path)?;
+        let content = fs::read_to_string(path).await?;
         let mappings_data: MappingsData = serde_json::from_str(&content)?;
         log::info!("Loaded {} mappings from {}", mappings_data.map.len(), path);
         Ok(Self {
@@ -42,11 +42,14 @@ impl Mappings {
     }
 
     /// Save mappings to file
-    pub fn save(&self, path: &str) -> Result<()> {
-        let data = self.data.lock().unwrap();
-        let content = serde_json::to_string_pretty(&*data)?;
-        fs::write(path, content)?;
-        log::debug!("Saved {} mappings to {}", data.map.len(), path);
+    pub async fn save(&self, path: &str) -> Result<()> {
+        let (content, count) = {
+            let data = self.data.lock().unwrap();
+            let content = serde_json::to_string_pretty(&*data)?;
+            (content, data.map.len())
+        };
+        fs::write(path, content).await?;
+        log::debug!("Saved {} mappings to {}", count, path);
         Ok(())
     }
 
@@ -107,23 +110,23 @@ mod tests {
         assert!(!mappings.has("output1"));
     }
 
-    #[test]
-    fn test_save_load() {
+    #[tokio::test]
+    async fn test_save_load() {
         let temp_file = "./test_mappings_temp.json";
         let mappings = Mappings::new();
         let uuid = Uuid::new_v4();
 
         mappings.set("output1".to_string(), uuid);
-        mappings.save(temp_file).unwrap();
+        mappings.save(temp_file).await.unwrap();
 
-        let loaded = Mappings::load(temp_file).unwrap();
+        let loaded = Mappings::load(temp_file).await.unwrap();
         assert_eq!(loaded.get("output1"), Some(uuid));
 
         let _ = fs::remove_file(temp_file);
     }
 
-    #[test]
-    fn test_mappings_saved_after_change() {
+    #[tokio::test]
+    async fn test_mappings_saved_after_change() {
         // Test that verifies mappings are persisted after modification
         let temp_file = "./test_mappings_after_change.json";
 
@@ -140,13 +143,13 @@ mod tests {
         mappings.set("output_zone3".to_string(), uuid3);
 
         // Save after settings change (this is what happens in main.rs after SettingsSaved)
-        mappings.save(temp_file).unwrap();
+        mappings.save(temp_file).await.unwrap();
 
         // Verify file exists and contains correct data
         assert!(std::path::Path::new(temp_file).exists(), "Mappings file should exist after save");
 
         // Load from file to verify persistence
-        let loaded = Mappings::load(temp_file).unwrap();
+        let loaded = Mappings::load(temp_file).await.unwrap();
         assert_eq!(loaded.get("output_zone1"), Some(uuid1));
         assert_eq!(loaded.get("output_zone2"), Some(uuid2));
         assert_eq!(loaded.get("output_zone3"), Some(uuid3));
@@ -155,10 +158,10 @@ mod tests {
         let mappings2 = loaded;
         let new_uuid = Uuid::new_v4();
         mappings2.set("output_zone2".to_string(), new_uuid);
-        mappings2.save(temp_file).unwrap();
+        mappings2.save(temp_file).await.unwrap();
 
         // Verify the change was persisted
-        let loaded2 = Mappings::load(temp_file).unwrap();
+        let loaded2 = Mappings::load(temp_file).await.unwrap();
         assert_eq!(loaded2.get("output_zone1"), Some(uuid1));
         assert_eq!(loaded2.get("output_zone2"), Some(new_uuid)); // Changed value
         assert_eq!(loaded2.get("output_zone3"), Some(uuid3));
@@ -167,8 +170,8 @@ mod tests {
         let _ = fs::remove_file(temp_file);
     }
 
-    #[test]
-    fn test_clear_and_save() {
+    #[tokio::test]
+    async fn test_clear_and_save() {
         // Test that clearing mappings (e.g., unmapping all) persists correctly
         let temp_file = "./test_mappings_clear.json";
 
@@ -176,14 +179,14 @@ mod tests {
         let mappings = Mappings::new();
         mappings.set("output1".to_string(), Uuid::new_v4());
         mappings.set("output2".to_string(), Uuid::new_v4());
-        mappings.save(temp_file).unwrap();
+        mappings.save(temp_file).await.unwrap();
 
         // Clear all mappings (simulates user unmapping everything)
         mappings.clear();
-        mappings.save(temp_file).unwrap();
+        mappings.save(temp_file).await.unwrap();
 
         // Verify empty mappings were saved
-        let loaded = Mappings::load(temp_file).unwrap();
+        let loaded = Mappings::load(temp_file).await.unwrap();
         assert_eq!(loaded.all().len(), 0, "Mappings should be empty after clear and save");
 
         // Cleanup

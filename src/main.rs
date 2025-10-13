@@ -28,7 +28,7 @@ async fn main() -> Result<()> {
     log::info!("=== FSCT-Roon Extension Starting ===");
 
     // Load mappings
-    let mappings = Arc::new(Mappings::load(MAPPINGS_FILE)?);
+    let mappings = Arc::new(Mappings::load(MAPPINGS_FILE).await?);
     log::info!("Loaded mappings");
 
     // Connect to FSCT driver
@@ -108,7 +108,7 @@ async fn main() -> Result<()> {
     let provided: HashMap<String, Svc> = HashMap::from([(roon_settings::SVCNAME.to_owned(), svc)]);
 
     // Connection callback
-    let on_connect = move || RoonApi::load_roon_state(ROON_STATE_FILE);
+    let on_connect = move || load_roon_state(ROON_STATE_FILE);
 
     // Start Roon discovery
     log::info!("Starting Roon discovery...");
@@ -172,6 +172,23 @@ async fn handle_core_event(event: CoreEvent) {
     }
 }
 
+fn load_roon_state(file: &str) -> roon_api::RoonState {
+    if !std::path::Path::new(file).exists() {
+        log::info!("Roon state file not found, starting with empty state");
+        return roon_api::RoonState::default();
+    }
+    std::fs::read_to_string(file).ok()
+        .and_then(|content| {
+            serde_json::from_str(&content).ok()}
+        ).unwrap_or_default()
+}
+async fn save_roon_state(file: &str, state: &roon_api::RoonState) -> Result<()> {
+    let content = serde_json::to_string_pretty(&state)?;
+    tokio::fs::write(file, content).await?;
+    log::debug!("Saved Roon state to {}", ROON_STATE_FILE);
+    Ok(())
+}
+
 async fn handle_message(
     _msg: serde_json::Value,
     parsed: Parsed,
@@ -181,7 +198,7 @@ async fn handle_message(
 ) {
     match parsed {
         Parsed::RoonState(state) => {
-            if let Err(e) = RoonApi::save_roon_state(ROON_STATE_FILE, state) {
+            if let Err(e) = save_roon_state(ROON_STATE_FILE, &state).await {
                 log::error!("Error saving Roon state: {}", e);
             }
         }
@@ -194,14 +211,18 @@ async fn handle_message(
                 let new_mappings = settings_to_mappings(&settings);
 
                 // Handle mapping changes via output manager (spawn to avoid blocking)
-                let om_clone = output_manager.clone();
-                let mappings_clone = mappings.clone();
-                tokio::spawn(async move {
-                    om_clone.handle_mappings_changed(new_mappings).await;
-                    if let Err(e) = mappings_clone.save(MAPPINGS_FILE) {
-                        log::error!("Error saving mappings: {}", e);
-                    }
-                });
+                output_manager.handle_mappings_changed(new_mappings).await;
+                if let Err(e) = mappings.save(MAPPINGS_FILE).await {
+                    log::error!("Error saving mappings: {}", e);
+                }
+                // let om_clone = output_manager.clone();
+                // let mappings_clone = mappings.clone();
+                // tokio::spawn(async move {
+                //     om_clone.handle_mappings_changed(new_mappings).await;
+                //     if let Err(e) = mappings_clone.save(MAPPINGS_FILE).await {
+                //         log::error!("Error saving mappings: {}", e);
+                //     }
+                // });
 
             } else {
                 log::error!("Failed to deserialize settings");
@@ -209,19 +230,21 @@ async fn handle_message(
         }
         Parsed::Outputs(outputs) => {
             log::info!("Outputs changed: {} outputs", outputs.len());
+            output_manager.handle_outputs_changed(outputs).await;
             // Spawn task to avoid blocking event loop
-            let om_clone = output_manager.clone();
-            tokio::spawn(async move {
-                om_clone.handle_outputs_changed(outputs).await;
-            });
+            // let om_clone = output_manager.clone();
+            // tokio::spawn(async move {
+            //     om_clone.handle_outputs_changed(outputs).await;
+            // });
         }
         Parsed::OutputsRemoved(removed_outputs) => {
             log::info!("Outputs removed: {:?}", removed_outputs);
+            output_manager.handle_outputs_removed(removed_outputs).await;
             // Spawn task to avoid blocking event loop
-            let om_clone = output_manager.clone();
-            tokio::spawn(async move {
-                om_clone.handle_outputs_removed(removed_outputs).await;
-            });
+            // let om_clone = output_manager.clone();
+            // tokio::spawn(async move {
+            //     om_clone.handle_outputs_removed(removed_outputs).await;
+            // });
         }
         Parsed::Zones(zones) => {
             // log::info!("Zones changed: {:#?}", zones);
