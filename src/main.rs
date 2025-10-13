@@ -210,50 +210,30 @@ async fn handle_message(
                 // Convert settings to mappings
                 let new_mappings = settings_to_mappings(&settings);
 
-                // Handle mapping changes via output manager (spawn to avoid blocking)
                 output_manager.handle_mappings_changed(new_mappings).await;
                 if let Err(e) = mappings.save(MAPPINGS_FILE).await {
                     log::error!("Error saving mappings: {}", e);
                 }
-                // let om_clone = output_manager.clone();
-                // let mappings_clone = mappings.clone();
-                // tokio::spawn(async move {
-                //     om_clone.handle_mappings_changed(new_mappings).await;
-                //     if let Err(e) = mappings_clone.save(MAPPINGS_FILE).await {
-                //         log::error!("Error saving mappings: {}", e);
-                //     }
-                // });
-
             } else {
                 log::error!("Failed to deserialize settings");
             }
         }
         Parsed::Outputs(outputs) => {
-            log::info!("Outputs changed: {} outputs", outputs.len());
+            log::debug!("Outputs changed: {:#?}", outputs.len());
             output_manager.handle_outputs_changed(outputs).await;
-            // Spawn task to avoid blocking event loop
-            // let om_clone = output_manager.clone();
-            // tokio::spawn(async move {
-            //     om_clone.handle_outputs_changed(outputs).await;
-            // });
         }
         Parsed::OutputsRemoved(removed_outputs) => {
-            log::info!("Outputs removed: {:?}", removed_outputs);
+            log::debug!("Outputs removed: {:#?}", removed_outputs);
             output_manager.handle_outputs_removed(removed_outputs).await;
-            // Spawn task to avoid blocking event loop
-            // let om_clone = output_manager.clone();
-            // tokio::spawn(async move {
-            //     om_clone.handle_outputs_removed(removed_outputs).await;
-            // });
         }
         Parsed::Zones(zones) => {
-            // log::info!("Zones changed: {:#?}", zones);
+            log::debug!("Zones changed: {:#?}", zones);
             for zone in zones {
                 zone_handler.handle_zone_changed(zone).await;
             }
         }
         Parsed::ZonesSeek(zones) => {
-            log::debug!("Zones seek: {} zones", zones.len());
+            log::debug!("Zones seek: {:#?}", zones);
             for zone in zones {
                 zone_handler.handle_zone_seek(zone).await;
             }
