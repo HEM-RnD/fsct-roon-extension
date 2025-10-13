@@ -76,9 +76,10 @@ async fn main() -> Result<()> {
         // Get available FSCT devices
         let devices = tokio::task::block_in_place(|| {
             tokio::runtime::Handle::current().block_on(async {
-                driver_clone
+                 driver_clone
                     .get_detected_devices()
                     .await
+                     .map_err(|e| log::error!("Error getting detected devices: {}", e))
                     .unwrap_or_default()
             })
         });

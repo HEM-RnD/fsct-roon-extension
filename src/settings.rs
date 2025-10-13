@@ -8,7 +8,7 @@ use uuid::Uuid;
 const UNMAPPED_OUTPUT_ID: &str = "__UNMAPPED__";
 
 /// Settings data structure
-#[derive(Clone, Serialize, Deserialize, Default)]
+#[derive(Clone, Serialize, Deserialize, Default, Debug)]
 pub struct ExtensionSettings {
     /// Device mappings: map from device UUID (as string) to output_id
     /// Using String instead of OutputSetting to keep dropdown values simple
