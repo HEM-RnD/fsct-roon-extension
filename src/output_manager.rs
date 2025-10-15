@@ -218,8 +218,9 @@ impl<D: FsctDriver> OutputManager<D> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use fsct::{DeviceInfo, ManagedPlayerId, PlayerState};
-    use anyhow::Result;
+    use fsct::{DeviceChangeEvent, DeviceInfo, ManagedPlayerId, PlayerState};
+    use anyhow::{Error, Result};
+    use tokio::sync::broadcast::Receiver;
 
     // Mock driver for testing
     struct MockDriver {
@@ -304,8 +305,17 @@ mod tests {
             Ok(None)
         }
 
-        async fn get_detected_devices(&self) -> Result<Vec<DeviceInfo>> {
+        async fn get_detected_devices(&self) -> Result<Vec<Uuid>> {
             Ok(Vec::new())
+        }
+
+        async fn subscribe_device_changes(&self) -> std::result::Result<Receiver<DeviceChangeEvent>, Error> {
+            let (_tx, rx) = tokio::sync::broadcast::channel(10);
+            Ok(rx)
+        }
+
+        async fn get_device_info(&self, _device_id: Uuid) -> Result<DeviceInfo> {
+            Err(Error::msg("not implemented"))
         }
     }
 
