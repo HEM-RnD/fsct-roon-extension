@@ -62,7 +62,7 @@ fn run_device_discovery_task(driver: Arc<dyn FsctDriver>, device_manager: Arc<Fs
     });
 }
 
-#[tokio::main]
+#[tokio::main(flavor="current_thread")]
 async fn main() -> Result<()> {
     env_logger::init();
     log::info!("=== FSCT-Roon Extension Starting ===");
